@@ -171,6 +171,35 @@ async def probe_service(
     return False, f"未知服务: {service_name}"
 
 
+async def probe_service_multi(
+    service_name: str,
+    proxy_url: Optional[str],
+    count: int = 3
+) -> Tuple[bool, str]:
+    """连续多次检测服务，任意失败则返回失败。
+    
+    Args:
+        service_name: 服务名称
+        proxy_url: 代理URL
+        count: 检测次数，默认3次
+        
+    Returns:
+        Tuple[bool, str]: (是否全部成功, 状态描述)
+    """
+    for i in range(count):
+        try:
+            is_unlocked, status = await probe_service(service_name, proxy_url)
+            if not is_unlocked:
+                return False, f"第{i+1}次检测失败: {status}"
+            # 如果不是最后一次检测，等待1秒
+            if i < count - 1:
+                await asyncio.sleep(1.0)
+        except Exception as e:
+            return False, f"第{i+1}次检测异常: {e}"
+    
+    return True, status
+
+
 async def select_next_proxy_in_group(
     client: ClashClient,
     proxy_group_name: str,
@@ -272,6 +301,7 @@ async def run_task(
     # Clash controller client
     async with ClashClient.from_external_controller(clash_config.controller, secret=clash_config.secret) as clash:
         rotations = 0
+        is_new_proxy = True
         
         while True:
             # Get current node before testing
@@ -282,10 +312,13 @@ async def run_task(
             except Exception:
                 pass
 
+            _probe = probe_service_multi if is_new_proxy else probe_service
+
             try:
-                ok, status_text = await probe_service(
+                ok, status_text = await _probe(
                     service_name, clash_config.http_proxy
                 )
+                is_new_proxy = False
             except Exception as e:
                 ok, status_text = False, f"检测异常: {e}"
 

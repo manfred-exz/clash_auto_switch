@@ -115,6 +115,7 @@ async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[UnlockItem
         ios_status = "Failed"
         try:
             response_ios = await client.get("https://ios.chat.openai.com/")
+            response_ios.raise_for_status()
             body_lower = response_ios.text.lower()
             if "you may be connected to a disallowed isp" in body_lower:
                 ios_status = "Disallowed ISP"
@@ -122,7 +123,7 @@ async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[UnlockItem
                 ios_status = "Yes"
             elif "sorry, you have been blocked" in body_lower:
                 ios_status = "Blocked"
-        except httpx.RequestError:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             pass
 
         results.append(UnlockItem("ChatGPT iOS", ios_status, region=region))
@@ -131,12 +132,13 @@ async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[UnlockItem
         web_status = "Failed"
         try:
             response_web = await client.get("https://api.openai.com/compliance/cookie_requirements")
+            response_web.raise_for_status()
             body_lower = response_web.text.lower()
             if "unsupported_country" in body_lower:
                 web_status = "Unsupported Country/Region"
             else:
                 web_status = "Yes"
-        except httpx.RequestError:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             pass
 
         results.append(UnlockItem("ChatGPT Web", web_status, region=region))
@@ -150,18 +152,32 @@ async def check_gemini(proxy: Optional[str] = None) -> UnlockItem:
         status = "Failed"
         region = None
         try:
+            # 等待完整响应，类似Rust版本的 response.text().await
             response = await client.get(url)
+            response.raise_for_status()  # 检查HTTP状态码
+            
+            # 确保完整读取响应体
             body = response.text
+            if not body:
+                return UnlockItem("Gemini", "Failed", region=None)
+            
+            # 检查是否包含成功标识
             is_ok = "45631641,null,true" in body
             status = "Yes" if is_ok else "No"
             
+            # 尝试提取国家代码
             match = re.search(r',2,1,200,"([A-Z]{3})"', body)
             if match:
                 country_code = match.group(1)
                 emoji = country_code_to_emoji(country_code)
                 region = f"{emoji}{country_code}"
-        except httpx.RequestError:
-            pass
+                
+        except httpx.HTTPStatusError as e:
+            status = f"Failed (HTTP {e.response.status_code})"
+        except httpx.RequestError as e:
+            status = f"Failed (Network: {str(e)[:50]})"
+        except Exception as e:
+            status = f"Failed (Error: {str(e)[:50]})"
 
     return UnlockItem("Gemini", status, region=region)
 
@@ -173,7 +189,13 @@ async def check_youtube_premium(proxy: Optional[str] = None) -> UnlockItem:
         region = None
         try:
             response = await client.get(url)
+            response.raise_for_status()
+            
+            # 确保完整读取响应体
             body = response.text
+            if not body:
+                return UnlockItem("Youtube Premium", "Failed", region=None)
+                
             body_lower = body.lower()
 
             if "youtube premium is not available in your country" in body_lower:
@@ -185,8 +207,12 @@ async def check_youtube_premium(proxy: Optional[str] = None) -> UnlockItem:
                     country_code = match.group(1).strip()
                     emoji = country_code_to_emoji(country_code)
                     region = f"{emoji}{country_code}"
-        except httpx.RequestError:
-            pass
+        except httpx.HTTPStatusError as e:
+            status = f"Failed (HTTP {e.response.status_code})"
+        except httpx.RequestError as e:
+            status = f"Failed (Network: {str(e)[:50]})"
+        except Exception as e:
+            status = f"Failed (Error: {str(e)[:50]})"
 
     return UnlockItem("Youtube Premium", status, region=region)
 
@@ -214,7 +240,9 @@ async def check_bahamut_anime(proxy: Optional[str] = None) -> UnlockItem:
             token_res = await anime_client.get(token_url)
             token_res.raise_for_status()
             
-            if "animeSn" not in token_res.text:
+            # 确保完整读取响应
+            token_body = token_res.text
+            if "animeSn" not in token_body:
                 return UnlockItem("Bahamut Anime", "No")
             
             # 第三步：访问主页获取区域信息
@@ -340,6 +368,7 @@ async def check_disney_plus(proxy: Optional[str] = None) -> UnlockItem:
             }
             res_token = await client.post(token_url, data=token_body, headers={"authorization": auth_header})
             
+            # 确保完整读取token响应
             token_text = res_token.text
             if "forbidden-location" in token_text or "403 ERROR" in token_text:
                  return UnlockItem("Disney+", "No (IP Banned By Disney+)")
@@ -358,19 +387,21 @@ async def check_disney_plus(proxy: Optional[str] = None) -> UnlockItem:
             }
             res_graphql = await client.post(graphql_url, json=graphql_payload, headers={"authorization": auth_header})
             
+            # 确保完整读取GraphQL响应
             graphql_body_text = res_graphql.text
             
             if res_graphql.status_code >= 400:
                  # Fallback to main page check
                 try:
                     res_main = await client.get("https://www.disneyplus.com/")
+                    res_main.raise_for_status()
                     body_main = res_main.text
                     match_main = re.search(r'"region"\s*:\s*"([^"]+)"', body_main)
                     if match_main:
                         region = match_main.group(1)
                         emoji = country_code_to_emoji(region)
                         return UnlockItem("Disney+", "Yes", region=f"{emoji}{region} (from main page)")
-                except (httpx.RequestError, ValueError):
+                except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
                     pass
                 return UnlockItem("Disney+", f"Failed (GraphQL error: {res_graphql.status_code})")
 
@@ -409,7 +440,11 @@ async def check_prime_video(proxy: Optional[str] = None) -> UnlockItem:
         try:
             response = await client.get(url)
             response.raise_for_status()
+            
+            # 确保完整读取响应
             body = response.text
+            if not body:
+                return UnlockItem("Prime Video", "Failed (Empty Response)")
             
             if "isServiceRestricted" in body:
                 return UnlockItem("Prime Video", "No (Service Not Available)")
@@ -422,8 +457,10 @@ async def check_prime_video(proxy: Optional[str] = None) -> UnlockItem:
             
             return UnlockItem("Prime Video", "Failed (Error: PAGE ERROR)")
 
-        except (httpx.RequestError, httpx.HTTPStatusError):
-            return UnlockItem("Prime Video", "Failed (Network Connection)")
+        except httpx.HTTPStatusError as e:
+            return UnlockItem("Prime Video", f"Failed (HTTP {e.response.status_code})")
+        except httpx.RequestError as e:
+            return UnlockItem("Prime Video", f"Failed (Network: {str(e)[:50]})")
 
 
 async def main(proxy: Optional[str]):
