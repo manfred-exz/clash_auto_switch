@@ -13,6 +13,7 @@ from clash_auto_switch.monitor import (
 from clash_auto_switch.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
     get_config_file_path,
+    get_data_file_path,
     load_config,
     save_config,
     has_config,
@@ -37,10 +38,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--show-stats",
+        action="store_true",
+        help="显示所有有数据的服务统计信息并退出",
+        default=False,
+    )
+    parser.add_argument(
+        "--show-stats-detail",
         type=str,
         nargs=2,
         metavar=("PROXY_GROUP", "SERVICE"),
-        help="显示指定代理组和服务的节点统计信息并退出",
+        help="显示指定代理组和服务的详细节点统计信息并退出",
+    )
+    parser.add_argument(
+        "--clear-stats",
+        action="store_true",
+        help="清除节点统计信息",
+        default=False,
     )
     parser.add_argument(
         "--show-config",
@@ -57,12 +70,59 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def show_statistics(proxy_group_name: str, service_name: str) -> None:
-    """Display statistics for the given proxy group and service."""
+def show_all_statistics() -> None:
+    """Display statistics for all services with data."""
+    storage = NodeHistoryStorage()
+    summary = storage.get_all_services_summary()
+    
+    if summary['total_services'] == 0:
+        print("\n暂无任何服务的统计数据。")
+        print("运行监控任务后将自动记录节点性能数据。")
+        return
+    
+    print(f"\n🚀 总共有 {summary['total_services']} 个服务的统计数据")
+    print("=" * 120)
+    
+    for service in summary['services']:
+        proxy_group = service['proxy_group']
+        service_name = service['service_name']
+        total_nodes = service['total_nodes']
+        total_checks = service['total_checks']
+        success_rate = service['success_rate']
+        
+        print(f"\n📋 [{proxy_group:<15}] {service_name}")
+        print(f"    节点数: {total_nodes:3d} | 检测次数: {total_checks:5d} | 成功率: {success_rate:6.2%}")
+        
+        # Get detailed statistics to show top 5 most reliable nodes
+        detailed_stats = storage.get_statistics(proxy_group, service_name)
+        rankings = detailed_stats.get('reliability_rankings', [])
+        
+        if rankings:
+            print("    🏆 前5个最可靠节点:")
+            for i, ranking in enumerate(rankings[:5], 1):
+                node_name = ranking['node']
+                reliability = ranking['reliability_score']
+                node_success_rate = ranking['success_rate']
+                total_node_checks = ranking['total_checks']
+                status_emoji = "✅" if ranking['current_status'] == "available" else "❌"
+                
+                print(f"       {i}. {node_name:<20} | "
+                      f"可靠性: {reliability:.3f} | "
+                      f"成功率: {node_success_rate:6.2%} | "
+                      f"检测: {total_node_checks:3d}次 {status_emoji}")
+        else:
+            print("    🏆 前5个最可靠节点: 暂无数据")
+    
+    print("=" * 120)
+    print("\n💡 使用 'clash_auto_switch --show-stats-detail PROXY_GROUP SERVICE' 查看详细统计")
+
+
+def show_detailed_statistics(proxy_group_name: str, service_name: str) -> None:
+    """Display detailed statistics for the given proxy group and service."""
     storage = NodeHistoryStorage()
     stats = storage.get_statistics(proxy_group_name, service_name)
     
-    print(f"\n=== 统计信息: {proxy_group_name} / {service_name} ===")
+    print(f"\n=== 详细统计信息: {proxy_group_name} / {service_name} ===")
     print(f"总节点数: {stats['total_nodes']}")
     print(f"总检测次数: {stats['total_checks']}")
     print(f"整体成功率: {stats['success_rate']:.2%}")
@@ -135,10 +195,19 @@ def main() -> None:
     if args.show_config:
         show_config_info()
         return
+
+    if args.clear_stats:
+        get_data_file_path().unlink(missing_ok=True)
+        print("节点统计信息已清除")
+        return
     
     if args.show_stats:
-        proxy_group_name, service_name = args.show_stats
-        show_statistics(proxy_group_name, service_name)
+        show_all_statistics()
+        return
+    
+    if args.show_stats_detail:
+        proxy_group_name, service_name = args.show_stats_detail
+        show_detailed_statistics(proxy_group_name, service_name)
         return
     
     # Load configuration file

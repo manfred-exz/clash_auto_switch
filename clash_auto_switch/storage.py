@@ -41,7 +41,7 @@ class NodeHistoryStorage:
     """Manages persistent storage of node switching history."""
     
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._data_file = get_data_file_path()
         self._data_file.parent.mkdir(parents=True, exist_ok=True)
     
@@ -229,6 +229,42 @@ class NodeHistoryStorage:
             records.sort(key=lambda r: r.last_check_time, reverse=True)
             return records
     
+    def get_all_services_summary(self) -> Dict:
+        """Get a summary of all services with data."""
+        with self._lock:
+            data = self._load_data()
+            
+            if not data:
+                return {
+                    "total_services": 0,
+                    "services": []
+                }
+            
+            services = []
+            for key in data.keys():
+                # Parse key format: "proxy_group#service_name"
+                if '#' in key:
+                    proxy_group, service_name = key.split('#', 1)
+                    stats = self.get_statistics(proxy_group, service_name)
+                    if stats['total_nodes'] > 0:  # Only include services with data
+                        services.append({
+                            "proxy_group": proxy_group,
+                            "service_name": service_name,
+                            "total_nodes": stats['total_nodes'],
+                            "total_checks": stats['total_checks'],
+                            "success_rate": stats['success_rate'],
+                            "most_reliable_node": stats['most_reliable_node'],
+                            "highest_reliability_score": stats['highest_reliability_score']
+                        })
+            
+            # Sort by proxy group and service name for consistent display
+            services.sort(key=lambda x: (x['proxy_group'], x['service_name']))
+            
+            return {
+                "total_services": len(services),
+                "services": services
+            }
+
     def get_statistics(self, proxy_group: str, service_name: str) -> Dict:
         """Get statistics for the proxy group and service."""
         records = self.get_node_history(proxy_group, service_name)
@@ -359,7 +395,7 @@ class NodeHistoryStorage:
         
         # Calculate scores for all available nodes
         candidates = []
-        for node in available_nodes:
+        for index, node in enumerate(available_nodes):
             node_info = reliability_map.get(node)
             if node_info:
                 # Existing node with reliability data
@@ -387,16 +423,18 @@ class NodeHistoryStorage:
                 # New node without history - give it a moderate score to try it
                 final_score = 0.3  # Neutral score for exploration
                 
-            candidates.append((node, final_score))
+            # Include original index to preserve order when scores are equal
+            candidates.append((node, final_score, index))
         
         if not candidates:
             return None
             
-        # Sort by score (highest first), then by name for stability
-        candidates.sort(key=lambda x: (-x[1], x[0]))
+        # Sort by score (highest first), then by original index for stability
+        # This preserves the original proxy group order when scores are equal
+        candidates.sort(key=lambda x: (-x[1], x[2]))
         
         # Prefer nodes that are not the current one
-        for node, score in candidates:
+        for node, score, index in candidates:
             if node != current_node:
                 return node
                 

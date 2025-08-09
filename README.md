@@ -47,9 +47,14 @@ clash_auto_switch --once
 
 #### 查看统计信息
 
-查看特定代理组和服务的节点可靠性统计：
+查看所有服务的统计信息概览：
 ```bash
-clash_auto_switch --show-stats "YourGroup" "netflix"
+clash_auto_switch --show-stats
+```
+
+查看特定代理组和服务的详细节点统计：
+```bash
+clash_auto_switch --show-stats-detail "YourGroup" "netflix"
 ```
 
 按 Ctrl-C 可以随时退出。
@@ -105,7 +110,9 @@ clash_auto_switch --show-stats "YourGroup" "netflix"
 - `--generate-config`：生成配置文件模板到默认位置
 - `--show-config`：显示当前配置文件位置和内容  
 - `--once`：只运行一次，服务可用后退出（覆盖配置文件设置）
-- `--show-stats PROXY_GROUP SERVICE`：显示指定代理组和服务的节点统计信息并退出
+- `--show-stats`：显示所有有数据的服务统计信息概览并退出
+- `--show-stats-detail PROXY_GROUP SERVICE`：显示指定代理组和服务的详细节点统计并退出
+- `--clear-stats`：清除所有节点统计信息
 
 **默认行为**：程序默认进入持续监控模式，会一直运行直到手动停止。
 
