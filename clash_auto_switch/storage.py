@@ -3,15 +3,13 @@ Persistent storage for node switching history and failure tracking.
 """
 
 import json
-import os
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 import threading
 
-from .project import get_data_file_path, get_config_file_path
+from .project import get_data_file_path
 
 
 @dataclass
