@@ -40,7 +40,7 @@ class MonitoringConfig:
     """Monitoring behavior configuration."""
     interval_sec: float = 30.0
     max_rotations: int = 0
-    monitor: bool = False
+    once: bool = False
 
 
 @dataclass
@@ -84,7 +84,7 @@ def parse_config_data(data: dict) -> AppConfig:
     monitoring_config = MonitoringConfig(
         interval_sec=monitoring_data.get("interval_sec", 30.0),
         max_rotations=monitoring_data.get("max_rotations", 0),
-        monitor=monitoring_data.get("monitor", False)
+        once=monitoring_data.get("once", False)
     )
     
     tasks = []
@@ -254,7 +254,7 @@ async def select_next_proxy_in_group(
     reliability_map = {node['node']: node['reliability_score'] for node in reliable_nodes}
     selected_score = reliability_map.get(recommended, 0.0)
     
-    print(f"选择代理: {recommended} (可靠性评分: {selected_score:.3f})")
+    print(f"    └── 推荐节点: {recommended:<20} | 可靠性评分: {selected_score:.3f}")
     
     return recommended
 
@@ -270,7 +270,11 @@ async def run_task(
     proxy_group_name = task.proxy_group_name
     service_name = task.service_name
     
-    print(f"[{task_name}] 开始监控: 代理组={proxy_group_name}, 服务={service_name}")
+    # Calculate padding for consistent alignment
+    max_task_name_width = 15  # Fixed width for task name column
+    task_name_padded = f"{task_name:<{max_task_name_width}}"
+    
+    print(f"[{task_name_padded}] 开始监控: 代理组={proxy_group_name}, 服务={service_name}")
     
     # Clash controller client
     async with ClashClient.from_external_controller(clash_config.controller, secret=clash_config.secret) as clash:
@@ -301,23 +305,28 @@ async def run_task(
                     is_available=ok
                 )
 
+            # Format current node display
+            node_display = current_node if current_node else "未知"
+            node_display_padded = f"{node_display:<20}"  # Fixed width for node column
+
             if ok:
                 if rotations != 0:
                     rotations = 0
-                print(f"[{task_name}] 服务可用 ✔ - {status_text} [节点: {current_node}]")
-                if not monitoring_config.monitor:
+                print(f"[{task_name_padded}] ✔ 服务可用   | {status_text:<35} | 节点: {node_display_padded}")
+                if monitoring_config.once:
                     return
                 await asyncio.sleep(monitoring_config.interval_sec)
                 continue
 
-            print(f"[{task_name}] 服务不可用 ✖ - {status_text} [节点: {current_node}]")
+            print(f"[{task_name_padded}] ✖ 服务不可用 | {status_text:<35} | 节点: {node_display_padded}")
 
             try:
                 next_proxy = await select_next_proxy_in_group(
                     clash, proxy_group_name, service_name, storage
                 )
                 rotations += 1
-                print(f"[{task_name}] 已切换到下一个代理: {proxy_group_name} -> {next_proxy}")
+                next_proxy_display = f"{next_proxy:<20}"
+                print(f"[{task_name_padded}] ➤ 切换代理   | {proxy_group_name} -> {next_proxy_display}")
                 
                 # Record the switch in storage
                 storage.record_node_status(
@@ -327,15 +336,13 @@ async def run_task(
                     is_available=False  # We haven't tested the new node yet
                 )
             except Exception as e:
-                print(f"[{task_name}] 切换代理失败: {e}")
+                print(f"[{task_name_padded}] ⚠ 切换失败   | {str(e):<35}")
                 # 等待后继续监控
                 await asyncio.sleep(monitoring_config.interval_sec)
                 continue
 
             if monitoring_config.max_rotations > 0 and rotations >= monitoring_config.max_rotations:
-                print(
-                    f"[{task_name}] 已达到最大切换次数 ({monitoring_config.max_rotations})，暂停后继续监控。"
-                )
+                print(f"[{task_name_padded}] ⏸ 暂停监控   | 已达到最大切换次数 ({monitoring_config.max_rotations})")
                 rotations = 0
                 await asyncio.sleep(max(monitoring_config.interval_sec, 30.0))
 
@@ -352,9 +359,12 @@ async def run_multiple_tasks(config: AppConfig) -> None:
         print("没有启用的监控任务。")
         return
     
-    print(f"启动 {len(enabled_tasks)} 个监控任务:")
+    print(f"🚀 启动 {len(enabled_tasks)} 个监控任务:")
+    print("=" * 80)
     for task in enabled_tasks:
-        print(f"  - {task.name}: {task.proxy_group_name} / {task.service_name}")
+        task_name_padded = f"{task.name:<15}"
+        print(f"  📋 [{task_name_padded}] 代理组: {task.proxy_group_name:<20} | 服务: {task.service_name}")
+    print("=" * 80)
     print()
     
     # Create tasks for concurrent execution
@@ -391,9 +401,9 @@ def parse_args() -> argparse.Namespace:
     )
     
     parser.add_argument(
-        "--monitor",
+        "--once",
         action="store_true",
-        help="强制开启持续监控模式（覆盖配置文件设置）",
+        help="只运行一次，不持续监控",
         default=False,
     )
     parser.add_argument(
@@ -469,20 +479,19 @@ def get_template_config() -> dict:
         "monitoring": {
             "interval_sec": 30.0,
             "max_rotations": 0,
-            "monitor": True
         },
         "tasks": [
             {
                 "name": "ChatGPT-US",
                 "proxy_group_name": "🇺🇸美国",
                 "service_name": "chatgpt",
-                "enabled": True
+                "enabled": False
             },
             {
                 "name": "Netflix-HK", 
                 "proxy_group_name": "🇭🇰香港",
                 "service_name": "netflix",
-                "enabled": True
+                "enabled": False
             },
             {
                 "name": "YouTube-JP",
@@ -490,18 +499,6 @@ def get_template_config() -> dict:
                 "service_name": "youtube_premium",
                 "enabled": False
             },
-            {
-                "name": "Disney-SG",
-                "proxy_group_name": "🇸🇬新加坡",
-                "service_name": "disney_plus", 
-                "enabled": True
-            },
-            {
-                "name": "Bilibili-TW",
-                "proxy_group_name": "🇹🇼台湾",
-                "service_name": "bilibili_hk_mc_tw",
-                "enabled": False
-            }
         ]
     }
 
@@ -562,8 +559,8 @@ def main() -> None:
         return
     
     # Override monitor setting if specified
-    if args.monitor:
-        config.monitoring.monitor = True
+    if args.once:
+        config.monitoring.once = True
     
     try:
         config_file = get_config_file_path()

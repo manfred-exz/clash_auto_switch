@@ -38,11 +38,11 @@ clash_auto_switch --show-config
 
 4. 运行监控：
 ```bash
-# 使用配置文件中的设置运行
+# 使用配置文件中的设置运行（默认持续监控）
 clash_auto_switch
 
-# 强制开启持续监控模式
-clash_auto_switch --monitor
+# 只运行一次，服务可用后退出
+clash_auto_switch --once
 ```
 
 #### 查看统计信息
@@ -68,7 +68,7 @@ clash_auto_switch --show-stats "YourGroup" "netflix"
   "monitoring": {
     "interval_sec": 30.0,
     "max_rotations": 0,
-    "monitor": true
+    "once": false
   },
   "tasks": [
     {
@@ -93,7 +93,7 @@ clash_auto_switch --show-stats "YourGroup" "netflix"
 - `clash.http_proxy`：探测请求所走的 HTTP 代理地址
 - `monitoring.interval_sec`：检测间隔（秒）
 - `monitoring.max_rotations`：最大连续切换次数（0 表示无限制）
-- `monitoring.monitor`：是否持续监控
+- `monitoring.once`：是否只运行一次（false 表示持续监控，true 表示服务可用后退出）
 - `tasks`：监控任务列表
   - `name`：任务名称（用于日志区分）
   - `proxy_group_name`：Clash 代理组名称
@@ -104,8 +104,10 @@ clash_auto_switch --show-stats "YourGroup" "netflix"
 
 - `--generate-config`：生成配置文件模板到默认位置
 - `--show-config`：显示当前配置文件位置和内容  
-- `--monitor`：强制开启持续监控模式（覆盖配置文件设置）
+- `--once`：只运行一次，服务可用后退出（覆盖配置文件设置）
 - `--show-stats PROXY_GROUP SERVICE`：显示指定代理组和服务的节点统计信息并退出
+
+**默认行为**：程序默认进入持续监控模式，会一直运行直到手动停止。
 
 所有其他配置（Clash地址、代理端口、检测间隔等）都通过配置文件管理。
 
