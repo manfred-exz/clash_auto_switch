@@ -30,6 +30,10 @@ clash_auto_switch "YourGroup" "chatgpt"
 clash_auto_switch "YourGroup" "netflix" --monitor
 ```
 
+示例：查看节点可靠性统计
+```bash
+clash_auto_switch "YourGroup" "netflix" --show-stats
+```
 
 按 Ctrl-C 可以随时退出。
 
@@ -45,7 +49,7 @@ clash_auto_switch "YourGroup" "netflix" --monitor
   - `--interval`（默认 `30.0` 秒）：检测/切换的间隔。
   - `--max-rotations`（默认 `0`）：最大连续切换次数；`0` 表示不限制。达到上限后会短暂等待并继续监控。
   - `--monitor`（默认关闭）：开启后持续后台监控；关闭时，一旦检测到可用即退出。
-
+  - `--show-stats`：显示节点可靠性统计信息并退出。
 
 ### 支持的服务与别名
 
@@ -73,3 +77,24 @@ clash_auto_switch "YourGroup" "netflix" --monitor
 ### 其他
 
 服务检测代码基于[clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev). 
+
+
+### 节点可靠性评估
+
+程序会为每个"节点-服务"组合自动计算可靠性评分（0.0-1.0），帮助您了解哪些节点最适合特定服务：
+
+通过 `--show-stats` 可查看按可靠性排序的节点列表
+
+#### 统计信息示例
+```
+=== 统计信息: MyProxyGroup / netflix ===
+总节点数: 3
+总检测次数: 45
+整体成功率: 73.33%
+最可靠节点: US-Node-A (可靠性评分: 0.856)
+
+📊 节点可靠性排名:
+   1. US-Node-A         可靠性: 0.856 成功率: 85% 检测次数:  20 ✅
+   2. US-Node-B         可靠性: 0.734 成功率: 70% 检测次数:  15 ❌
+   3. US-Node-C         可靠性: 0.412 成功率: 60% 检测次数:  10 ❌
+```
