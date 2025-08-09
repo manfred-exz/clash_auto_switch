@@ -65,3 +65,38 @@ def save_config(config_data: Dict) -> bool:
 def has_config() -> bool:
     """Check if configuration file exists."""
     return get_config_file_path().exists()
+
+
+def get_template_config() -> dict:
+    """Get the default configuration template."""
+    return {
+        "clash": {
+            "controller": "127.0.0.1:9097",
+            "secret": None,
+            "http_proxy": "http://127.0.0.1:7890"
+        },
+        "monitoring": {
+            "interval_sec": 30.0,
+            "max_rotations": 0,
+        },
+        "tasks": [
+            {
+                "name": "ChatGPT-US",
+                "proxy_group_name": "🇺🇸美国",
+                "service_name": "chatgpt",
+                "enabled": False
+            },
+            {
+                "name": "Netflix-HK", 
+                "proxy_group_name": "🇭🇰香港",
+                "service_name": "netflix",
+                "enabled": False
+            },
+            {
+                "name": "YouTube-JP",
+                "proxy_group_name": "🇯🇵日本", 
+                "service_name": "youtube_premium",
+                "enabled": False
+            },
+        ]
+    }
