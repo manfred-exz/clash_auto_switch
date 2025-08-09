@@ -4,16 +4,23 @@
 
 程序会按指定间隔检测服务，未解锁/不可用时自动切到下一个可用节点。
 
-### 先决条件
+![](./images/1.jpg)
 
-- 已安装并运行 Clash/Clash.Meta，且开启 External Controller（REST API）。
-  - 例如在 Clash 配置中：
-    - `external-controller: 127.0.0.1:9097`
-    - 若设置了 `secret`，运行本工具时需通过 `--secret` 传入。
-- Python 3.9+ 环境。
+### 先决条件
+- 你应该为每一个服务在Clash中单独配置一个`proxy-group`，这样`clash_auto_switch`才能控制该`proxy-group`，而不影响其他路由
 
 ### Clash配置
-- 配置proxy-groups，如
+配置proxy-groups
+
+- 包括所有节点
+
+  ```yaml
+  -   name: "Google-Gemini"
+      type: select
+      include-all-proxies: true
+  ```
+
+- 可以手动挑选节点，如
 
   ```yaml
   -   name: "Google-Gemini"
@@ -24,11 +31,24 @@
           - node-c
   ```
 
-- 配置rules，如
+- 使用proxy-providers
+
+  ```yaml
+  -   name: "Google-Gemini"
+      type: select
+      use:
+          - provider-a
+  ```
+
+配置路由规则rules
+
+- 使用[geosite](https://github.com/v2fly/domain-list-community)
   ```yaml
   - GEOSITE,google-gemini,Google-Gemini
   - GEOSITE,youtube,Youtube
   ```
+
+- 手动配置请参考 https://wiki.metacubex.one/config/rules/
 
 ### 安装
 
@@ -69,6 +89,8 @@ clash_auto_switch --once
 ```bash
 clash_auto_switch --show-stats
 ```
+
+![](./images/2.jpg)
 
 查看特定代理组和服务的详细节点统计：
 ```bash
