@@ -4,36 +4,30 @@
 
 程序会按指定间隔检测服务，未解锁/不可用时自动切到下一个可用节点。
 
-### 工作原理
-
-- 使用 Clash External Controller 接口读取指定代理组的 `now` 和 `all` 列表。
-- 调用内置的解锁检测（在 `clash_auto_switch/unlock_tester.py` 中），判定目标服务是否可用。
-- 不可用 → 切换到组内下一个“合格”节点：
-  - 跳过 5 分钟内检测失败过的节点；
-  - 跳过目前不可用的节点；
-  - 找到第一个合格节点后调用 `PUT /proxies/:group {"name": candidate}` 切换。
-
 ### 先决条件
 
 - 已安装并运行 Clash/Clash.Meta，且开启 External Controller（REST API）。
   - 例如在 Clash 配置中：
     - `external-controller: 127.0.0.1:9097`
     - 若设置了 `secret`，运行本工具时需通过 `--secret` 传入。
-- 已在 Clash 中配置要操作的“选择器”代理组（Selector/Fallback/URLTest等），并包含多个候选节点。
 - Python 3.9+ 环境。
 
 ### 安装
 
 ```bash
-pip install -r requirements.txt
+pip install .
 ```
 
 ### 运行
 
+示例：一次性检测 ChatGPT，成功即退出
 ```bash
-python -m clash_auto_switch.main "<代理组名>" "<服务名>" \
-  --controller 127.0.0.1:9097 \
-  --http-proxy http://127.0.0.1:7890
+clash_auto_switch "YourGroup" "chatgpt"
+```
+
+示例：持续监控 Netflix，失败则切换节点
+```bash
+clash_auto_switch "YourGroup" "netflix" --monitor
 ```
 
 
@@ -42,25 +36,16 @@ python -m clash_auto_switch.main "<代理组名>" "<服务名>" \
 ### 参数说明
 
 - 必选参数：
-  - `proxy_group_name`：Clash 中要轮换的代理组名称（区分大小写）。
-  - `service_name`：要检测的服务名（见“支持的服务与别名”）。
+  - `proxy_group_name`：Clash 中要轮换的代理组名称
+  - `service_name`：要检测的服务名
 - 可选参数：
-  - `--controller`（默认 `127.0.0.1:9097`）：Clash External Controller 地址（可带协议）。
+  - `--controller`（默认 `127.0.0.1:9097`）：Clash External Controller 地址。
   - `--secret`：若 Clash 开启了 API 密钥，需传入此 Secret。
   - `--http-proxy`（默认 `http://127.0.0.1:7890`）：探测请求所走的 HTTP 代理（通常指向 Clash 的本地 HTTP 端口）。
   - `--interval`（默认 `30.0` 秒）：检测/切换的间隔。
   - `--max-rotations`（默认 `0`）：最大连续切换次数；`0` 表示不限制。达到上限后会短暂等待并继续监控。
   - `--monitor`（默认关闭）：开启后持续后台监控；关闭时，一旦检测到可用即退出。
 
-示例：一次性检测 ChatGPT，成功即退出（默认行为）
-```bash
-python -m clash_auto_switch.main "YourGroup" "chatgpt"
-```
-
-示例：持续监控 Netflix，失败则切换节点，直到 Ctrl-C
-```bash
-python -m clash_auto_switch.main "YourGroup" "netflix" --monitor
-```
 
 ### 支持的服务与别名
 
