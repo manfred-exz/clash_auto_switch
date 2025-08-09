@@ -81,19 +81,16 @@ def get_template_config() -> dict:
         },
         "tasks": [
             {
-                "name": "ChatGPT-US",
                 "proxy_group_name": "🇺🇸美国",
                 "service_name": "chatgpt",
                 "enabled": False
             },
             {
-                "name": "Netflix-HK", 
                 "proxy_group_name": "🇭🇰香港",
                 "service_name": "netflix",
                 "enabled": False
             },
             {
-                "name": "YouTube-JP",
                 "proxy_group_name": "🇯🇵日本", 
                 "service_name": "youtube_premium",
                 "enabled": False

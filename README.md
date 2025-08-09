@@ -2,59 +2,55 @@
 
 `clash_auto_switch` 是自动切换Clash节点，以保证目标服务（如 ChatGPT、Netflix、Disney+ 等）可用的小工具。
 
-程序会按指定间隔检测服务，未解锁/不可用时自动切到下一个可用节点。
-
 ![](./images/1.jpg)
 
-### 先决条件
-- 你应该为每一个服务在Clash中单独配置一个`proxy-group`，这样`clash_auto_switch`才能控制该`proxy-group`，而不影响其他路由
+- 程序会定时检测服务，未解锁/不可用时自动切到下一个可用节点
+- 节点在指定的proxy-group中选择
 
-### Clash配置
-配置proxy-groups
+### 使用说明
+- 对于用户指定的一对(`proxy-group`, `service`)，本工具会在`proxy-group`中切换节点，以保证`service`可用
 
-- 包括所有节点
+- 简易用法
+  - 不修改clash的配置/订阅
+  - `proxy-group`:配置为默认代理组(包含你的所有节点)
+  - `service`: 选择要监控的服务
+  - 示例配置
+    ```json
+    "tasks": [
+      {
+          "proxy_group_name": "your default proxy group",
+          "service_name": "chatgpt",
+          "enabled": true
+      }
+    ]
+    ```
 
-  ```yaml
-  -   name: "Google-Gemini"
-      type: select
-      include-all-proxies: true
-  ```
-
-- 可以手动挑选节点，如
-
-  ```yaml
-  -   name: "Google-Gemini"
-      type: select
-      proxies:
-          - node-a
-          - node-b
-          - node-c
-  ```
-
-- 使用proxy-providers
-
-  ```yaml
-  -   name: "Google-Gemini"
-      type: select
-      use:
-          - provider-a
-  ```
-
-配置路由规则rules
-
-- 使用[geosite](https://github.com/v2fly/domain-list-community)
-  ```yaml
-  - GEOSITE,google-gemini,Google-Gemini
-  - GEOSITE,youtube,Youtube
-  ```
-
-- 手动配置请参考 https://wiki.metacubex.one/config/rules/
+- 高级用法
+  - 为每一个要监控的`service`，在Clash中单独配置一个`proxy-group`
+  - 示例配置
+    ```json
+    "tasks": [
+      {
+          "proxy_group_name": "openai_proxy_group",
+          "service_name": "chatgpt",
+          "enabled": true
+      },
+      {
+          "proxy_group_name": "gemini_proxy_group",
+          "service_name": "gemini",
+          "enabled": true
+      }
+    ]
+    ```
 
 ### 安装
 
 ```bash
+# 源码安装
 pip install .
 ```
+
+或者直接下载二进制版 [release](https://github.com/manfred-exz/clash_auto_switch/releases/latest)
 
 ### 运行
 
@@ -112,18 +108,15 @@ clash_auto_switch --show-stats-detail "YourGroup" "netflix"
   },
   "monitoring": {
     "interval_sec": 30.0,
-    "max_rotations": 0,
-    "once": false
+    "max_rotations": 0
   },
   "tasks": [
     {
-      "name": "ChatGPT-US",
       "proxy_group_name": "🇺🇸美国",
       "service_name": "chatgpt",
       "enabled": true
     },
     {
-      "name": "Netflix-HK", 
       "proxy_group_name": "🇭🇰香港",
       "service_name": "netflix",
       "enabled": true
@@ -173,6 +166,48 @@ clash_auto_switch --show-stats-detail "YourGroup" "netflix"
 - 动画疯：`bahamut_anime`, `bahamut`
 
 
+### Clash配置参考
+配置proxy-groups
+
+- 包括所有节点
+
+  ```yaml
+  -   name: "Google-Gemini"
+      type: select
+      include-all-proxies: true
+  ```
+
+- 可以手动挑选节点，如
+
+  ```yaml
+  -   name: "Google-Gemini"
+      type: select
+      proxies:
+          - node-a
+          - node-b
+          - node-c
+  ```
+
+- 使用proxy-providers
+
+  ```yaml
+  -   name: "Google-Gemini"
+      type: select
+      use:
+          - provider-a
+  ```
+
+配置路由规则rules
+
+- 使用[geosite](https://github.com/v2fly/domain-list-community)
+  ```yaml
+  - GEOSITE,google-gemini,Google-Gemini
+  - GEOSITE,youtube,Youtube
+  ```
+
+- 手动配置请参考 https://wiki.metacubex.one/config/rules/
+
+
 ### 常见问题
 
 - 提示无法连接或 401：
@@ -184,24 +219,3 @@ clash_auto_switch --show-stats-detail "YourGroup" "netflix"
 ### 其他
 
 服务检测代码基于[clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev). 
-
-
-### 节点可靠性评估
-
-程序会为每个"节点-服务"组合自动计算可靠性评分（0.0-1.0），帮助您了解哪些节点最适合特定服务：
-
-通过 `--show-stats` 可查看按可靠性排序的节点列表
-
-#### 统计信息示例
-```
-=== 统计信息: MyProxyGroup / netflix ===
-总节点数: 3
-总检测次数: 45
-整体成功率: 73.33%
-最可靠节点: US-Node-A (可靠性评分: 0.856)
-
-📊 节点可靠性排名:
-   1. US-Node-A         可靠性: 0.856 成功率: 85% 检测次数:  20 ✅
-   2. US-Node-B         可靠性: 0.734 成功率: 70% 检测次数:  15 ❌
-   3. US-Node-C         可靠性: 0.412 成功率: 60% 检测次数:  10 ❌
-```

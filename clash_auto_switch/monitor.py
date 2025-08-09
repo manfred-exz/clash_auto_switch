@@ -39,7 +39,6 @@ class MonitoringConfig:
 @dataclass
 class TaskConfig:
     """Individual monitoring task configuration."""
-    name: str
     proxy_group_name: str
     service_name: str
     enabled: bool = True
@@ -83,7 +82,6 @@ def parse_config_data(data: dict) -> AppConfig:
     tasks = []
     for task_data in tasks_data:
         task = TaskConfig(
-            name=task_data["name"],
             proxy_group_name=task_data["proxy_group_name"],
             service_name=task_data["service_name"],
             enabled=task_data.get("enabled", True)
@@ -288,7 +286,7 @@ async def run_task(
     storage: NodeHistoryStorage,
 ) -> None:
     """Run a single monitoring task."""
-    task_name = task.name
+    task_name = task.service_name
     proxy_group_name = task.proxy_group_name
     service_name = task.service_name
     
@@ -388,7 +386,7 @@ async def run_multiple_tasks(config: AppConfig) -> None:
     print(f"🚀 启动 {len(enabled_tasks)} 个监控任务:")
     print("=" * 80)
     for task in enabled_tasks:
-        task_name_padded = f"{task.name:<15}"
+        task_name_padded = f"{task.service_name:<15}"
         print(f"  📋 [{task_name_padded}] 代理组: {task.proxy_group_name:<20} | 服务: {task.service_name}")
     print("=" * 80)
     print()
@@ -398,7 +396,7 @@ async def run_multiple_tasks(config: AppConfig) -> None:
     for task_config in enabled_tasks:
         task = asyncio.create_task(
             run_task(task_config, config.clash, config.monitoring, storage),
-            name=task_config.name
+            name=task_config.service_name
         )
         tasks.append(task)
     
