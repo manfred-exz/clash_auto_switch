@@ -12,6 +12,24 @@
     - 若设置了 `secret`，运行本工具时需通过 `--secret` 传入。
 - Python 3.9+ 环境。
 
+### Clash配置
+- 配置proxy-groups，如
+
+  ```yaml
+  -   name: "Google-Gemini"
+      type: select
+      proxies:
+          - node-a
+          - node-b
+          - node-c
+  ```
+
+- 配置rules，如
+  ```yaml
+  - GEOSITE,google-gemini,Google-Gemini
+  - GEOSITE,youtube,Youtube
+  ```
+
 ### 安装
 
 ```bash
