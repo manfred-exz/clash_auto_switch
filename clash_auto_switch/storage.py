@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 import threading
 
+from .project import get_data_file_path, get_config_file_path
+
 
 @dataclass
 class NodeRecord:
@@ -40,28 +42,10 @@ class NodeRecord:
 class NodeHistoryStorage:
     """Manages persistent storage of node switching history."""
     
-    def __init__(self, app_name: str = "clash-auto-switch"):
-        self.app_name = app_name
+    def __init__(self):
         self._lock = threading.Lock()
-        self._data_file = self._get_data_file_path()
+        self._data_file = get_data_file_path()
         self._data_file.parent.mkdir(parents=True, exist_ok=True)
-        
-    def _get_data_file_path(self) -> Path:
-        """Get the appropriate data directory for the current OS."""
-        if os.name == 'nt':  # Windows
-            app_data = os.environ.get('APPDATA', os.path.expanduser('~'))
-            data_dir = Path(app_data) / self.app_name
-        elif os.name == 'posix':  # Unix/Linux/macOS
-            if 'darwin' in os.uname().sysname.lower():  # macOS
-                data_dir = Path.home() / 'Library' / 'Application Support' / self.app_name
-            else:  # Linux
-                xdg_data_home = os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local' / 'share'))
-                data_dir = Path(xdg_data_home) / self.app_name
-        else:
-            # Fallback to user home directory
-            data_dir = Path.home() / f'.{self.app_name}'
-            
-        return data_dir / 'node_history.json'
     
     def _load_data(self) -> Dict[str, List[Dict]]:
         """Load data from storage file."""

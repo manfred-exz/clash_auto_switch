@@ -1,11 +1,19 @@
 import asyncio
 import argparse
-from typing import Optional, Tuple
+import json
+from typing import Optional, Tuple, List
+from dataclasses import dataclass
 
 import httpx
 
 from clash_auto_switch.clash_api import ClashClient
 from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.project import (
+    get_config_file_path,
+    load_config,
+    save_config,
+    has_config,
+)
 from clash_auto_switch.unlock_tester import (
     check_bilibili_china_mainland,
     check_bilibili_hk_mc_tw,
@@ -17,6 +25,83 @@ from clash_auto_switch.unlock_tester import (
     check_disney_plus,
     check_prime_video,
 )
+
+
+@dataclass
+class ClashConfig:
+    """Clash controller configuration."""
+    controller: str = "127.0.0.1:9097"
+    secret: Optional[str] = None
+    http_proxy: str = "http://127.0.0.1:7890"
+
+
+@dataclass
+class MonitoringConfig:
+    """Monitoring behavior configuration."""
+    interval_sec: float = 30.0
+    max_rotations: int = 0
+    monitor: bool = False
+
+
+@dataclass
+class TaskConfig:
+    """Individual monitoring task configuration."""
+    name: str
+    proxy_group_name: str
+    service_name: str
+    enabled: bool = True
+
+
+@dataclass
+class AppConfig:
+    """Complete application configuration."""
+    clash: ClashConfig
+    monitoring: MonitoringConfig
+    tasks: List[TaskConfig]
+
+
+def load_app_config() -> Optional[AppConfig]:
+    """Load configuration from the standard location."""
+    data = load_config()
+    if not data:
+        return None
+    return parse_config_data(data)
+
+
+def parse_config_data(data: dict) -> AppConfig:
+    """Parse configuration data into AppConfig object."""
+    # Parse configuration sections
+    clash_data = data.get("clash", {})
+    monitoring_data = data.get("monitoring", {})
+    tasks_data = data.get("tasks", [])
+    
+    clash_config = ClashConfig(
+        controller=clash_data.get("controller", "127.0.0.1:9097"),
+        secret=clash_data.get("secret"),
+        http_proxy=clash_data.get("http_proxy", "http://127.0.0.1:7890")
+    )
+    
+    monitoring_config = MonitoringConfig(
+        interval_sec=monitoring_data.get("interval_sec", 30.0),
+        max_rotations=monitoring_data.get("max_rotations", 0),
+        monitor=monitoring_data.get("monitor", False)
+    )
+    
+    tasks = []
+    for task_data in tasks_data:
+        task = TaskConfig(
+            name=task_data["name"],
+            proxy_group_name=task_data["proxy_group_name"],
+            service_name=task_data["service_name"],
+            enabled=task_data.get("enabled", True)
+        )
+        tasks.append(task)
+    
+    return AppConfig(
+        clash=clash_config,
+        monitoring=monitoring_config,
+        tasks=tasks
+    )
 
 
 async def probe_service(
@@ -174,26 +259,22 @@ async def select_next_proxy_in_group(
     return recommended
 
 
-async def run(
-    proxy_group_name: str,
-    service_name: str,
-    controller: str,
-    secret: Optional[str],
-    http_proxy: str,
-    interval_sec: float,
-    max_rotations: int,
-    monitor: bool,
-    storage: Optional[NodeHistoryStorage] = None,
+async def run_task(
+    task: TaskConfig,
+    clash_config: ClashConfig,
+    monitoring_config: MonitoringConfig,
+    storage: NodeHistoryStorage,
 ) -> None:
-    # Use provided storage or create new one
-    if storage is None:
-        storage = NodeHistoryStorage()
+    """Run a single monitoring task."""
+    task_name = task.name
+    proxy_group_name = task.proxy_group_name
+    service_name = task.service_name
+    
+    print(f"[{task_name}] 开始监控: 代理组={proxy_group_name}, 服务={service_name}")
     
     # Clash controller client
-    async with ClashClient.from_external_controller(controller, secret=secret) as clash:
-        # Probe HTTP client routed via Clash HTTP proxy
+    async with ClashClient.from_external_controller(clash_config.controller, secret=clash_config.secret) as clash:
         rotations = 0
-        print(f"开始监控: 代理组={proxy_group_name}, 服务={service_name}")
         
         while True:
             # Get current node before testing
@@ -206,7 +287,7 @@ async def run(
 
             try:
                 ok, status_text = await probe_service(
-                    service_name, http_proxy
+                    service_name, clash_config.http_proxy
                 )
             except Exception as e:
                 ok, status_text = False, f"检测异常: {e}"
@@ -223,20 +304,20 @@ async def run(
             if ok:
                 if rotations != 0:
                     rotations = 0
-                print(f"服务可用 ✔ - {status_text} [节点: {current_node}]")
-                if not monitor:
+                print(f"[{task_name}] 服务可用 ✔ - {status_text} [节点: {current_node}]")
+                if not monitoring_config.monitor:
                     return
-                await asyncio.sleep(interval_sec)
+                await asyncio.sleep(monitoring_config.interval_sec)
                 continue
 
-            print(f"服务不可用 ✖ - {status_text} [节点: {current_node}]")
+            print(f"[{task_name}] 服务不可用 ✖ - {status_text} [节点: {current_node}]")
 
             try:
                 next_proxy = await select_next_proxy_in_group(
                     clash, proxy_group_name, service_name, storage
                 )
                 rotations += 1
-                print(f"已切换到下一个代理: {proxy_group_name} -> {next_proxy}")
+                print(f"[{task_name}] 已切换到下一个代理: {proxy_group_name} -> {next_proxy}")
                 
                 # Record the switch in storage
                 storage.record_node_status(
@@ -246,70 +327,92 @@ async def run(
                     is_available=False  # We haven't tested the new node yet
                 )
             except Exception as e:
-                print(f"切换代理失败: {e}")
+                print(f"[{task_name}] 切换代理失败: {e}")
                 # 等待后继续监控
-                await asyncio.sleep(interval_sec)
+                await asyncio.sleep(monitoring_config.interval_sec)
                 continue
 
-            if max_rotations > 0 and rotations >= max_rotations:
+            if monitoring_config.max_rotations > 0 and rotations >= monitoring_config.max_rotations:
                 print(
-                    f"已达到最大切换次数 ({max_rotations})，暂停后继续监控。"
+                    f"[{task_name}] 已达到最大切换次数 ({monitoring_config.max_rotations})，暂停后继续监控。"
                 )
                 rotations = 0
-                await asyncio.sleep(max(interval_sec, 30.0))
-            # else:
-            #     await asyncio.sleep(1)
+                await asyncio.sleep(max(monitoring_config.interval_sec, 30.0))
+
+
+async def run_multiple_tasks(config: AppConfig) -> None:
+    """Run multiple monitoring tasks concurrently."""
+    storage = NodeHistoryStorage()
+    storage.startup_cleanup()
+    
+    # Filter enabled tasks
+    enabled_tasks = [task for task in config.tasks if task.enabled]
+    
+    if not enabled_tasks:
+        print("没有启用的监控任务。")
+        return
+    
+    print(f"启动 {len(enabled_tasks)} 个监控任务:")
+    for task in enabled_tasks:
+        print(f"  - {task.name}: {task.proxy_group_name} / {task.service_name}")
+    print()
+    
+    # Create tasks for concurrent execution
+    tasks = []
+    for task_config in enabled_tasks:
+        task = asyncio.create_task(
+            run_task(task_config, config.clash, config.monitoring, storage),
+            name=task_config.name
+        )
+        tasks.append(task)
+    
+    try:
+        # Wait for all tasks to complete (which should be never in monitor mode)
+        await asyncio.gather(*tasks)
+    except Exception as e:
+        print(f"监控任务异常: {e}")
+        # Cancel all tasks
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        raise
+
+
+
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "持续检测某服务是否可用；若不可用则在指定Clash代理组内切换到下一个节点。"
-        )
+            "持续检测多个服务是否可用；若不可用则在指定Clash代理组内切换到下一个节点。\n"
+            "所有配置通过配置文件管理，使用 --generate-config 创建配置文件。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("proxy_group_name", type=str, help="Clash 代理组名称（Selector）")
-    parser.add_argument("service_name", type=str, help="要检测的服务名称，如 chatgpt/netflix/gemini 等")
-
-    parser.add_argument(
-        "--controller",
-        type=str,
-        default="127.0.0.1:9097",
-        help="Clash external-controller 地址（可包含协议），默认 127.0.0.1:9097",
-    )
-    parser.add_argument(
-        "--secret",
-        type=str,
-        default=None,
-        help="Clash REST API 的 Secret（如有设置）",
-    )
-    parser.add_argument(
-        "--http-proxy",
-        type=str,
-        default="http://127.0.0.1:7890",
-        help="用于探测请求的 HTTP 代理（指向 Clash 的 HTTP/SOCKS 代理端口）",
-    )
-    parser.add_argument(
-        "--interval",
-        type=float,
-        default=30.0,
-        help="每次探测/切换之间的等待秒数，默认 30s",
-    )
-    parser.add_argument(
-        "--max-rotations",
-        type=int,
-        default=0,
-        help="最大切换次数，0 表示无限直到成功",
-    )
+    
     parser.add_argument(
         "--monitor",
         action="store_true",
-        help="开启持续监控（默认关闭）。关闭时，服务一旦可用即退出。",
+        help="强制开启持续监控模式（覆盖配置文件设置）",
         default=False,
     )
     parser.add_argument(
         "--show-stats",
+        type=str,
+        nargs=2,
+        metavar=("PROXY_GROUP", "SERVICE"),
+        help="显示指定代理组和服务的节点统计信息并退出",
+    )
+    parser.add_argument(
+        "--show-config",
         action="store_true",
-        help="显示节点统计信息并退出",
+        help="显示当前配置文件位置和内容",
+        default=False,
+    )
+    parser.add_argument(
+        "--generate-config",
+        action="store_true",
+        help="生成配置文件模板到默认位置并退出",
         default=False,
     )
     return parser.parse_args()
@@ -355,31 +458,117 @@ def show_statistics(proxy_group_name: str, service_name: str) -> None:
               f"检测次数 {node_stats.get('total_checks', 0)} {status_emoji}")
 
 
+def get_template_config() -> dict:
+    """Get the default configuration template."""
+    return {
+        "clash": {
+            "controller": "127.0.0.1:9097",
+            "secret": None,
+            "http_proxy": "http://127.0.0.1:7890"
+        },
+        "monitoring": {
+            "interval_sec": 30.0,
+            "max_rotations": 0,
+            "monitor": True
+        },
+        "tasks": [
+            {
+                "name": "ChatGPT-US",
+                "proxy_group_name": "🇺🇸美国",
+                "service_name": "chatgpt",
+                "enabled": True
+            },
+            {
+                "name": "Netflix-HK", 
+                "proxy_group_name": "🇭🇰香港",
+                "service_name": "netflix",
+                "enabled": True
+            },
+            {
+                "name": "YouTube-JP",
+                "proxy_group_name": "🇯🇵日本", 
+                "service_name": "youtube_premium",
+                "enabled": False
+            },
+            {
+                "name": "Disney-SG",
+                "proxy_group_name": "🇸🇬新加坡",
+                "service_name": "disney_plus", 
+                "enabled": True
+            },
+            {
+                "name": "Bilibili-TW",
+                "proxy_group_name": "🇹🇼台湾",
+                "service_name": "bilibili_hk_mc_tw",
+                "enabled": False
+            }
+        ]
+    }
+
+
+def generate_config_template() -> str:
+    """Generate configuration template file to the standard location."""
+    template_content = get_template_config()
+    
+    if save_config(template_content):
+        config_file = get_config_file_path()
+        print(f"配置文件模板已生成: {config_file}")
+        print("请根据需要修改配置文件中的代理组名称、服务名称等设置。")
+        return str(config_file)
+    else:
+        raise RuntimeError("配置文件生成失败")
+
+
+def show_config_info() -> None:
+    """Display current configuration file location and content."""
+    config_file = get_config_file_path()
+    print(f"配置文件位置: {config_file}")
+    
+    if has_config():
+        print("配置文件内容:")
+        data = load_config()
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        print("配置文件不存在。使用 --generate-config 创建配置文件。")
+
+
 def main() -> None:
     args = parse_args()
     
     # Handle utility operations
-    if args.show_stats:
-        show_statistics(args.proxy_group_name, args.service_name)
+    if args.generate_config:
+        generate_config_template()
         return
     
-    storage = NodeHistoryStorage()
-    storage.startup_cleanup()
+    if args.show_config:
+        show_config_info()
+        return
+    
+    if args.show_stats:
+        proxy_group_name, service_name = args.show_stats
+        show_statistics(proxy_group_name, service_name)
+        return
+    
+    # Load configuration file
+    if not has_config():
+        print("错误: 配置文件不存在")
+        print("使用 --generate-config 创建配置文件")
+        print("使用 --show-config 查看配置文件信息")
+        return
+    
+    config = load_app_config()
+    if not config:
+        print("错误: 配置文件为空或格式错误")
+        return
+    
+    # Override monitor setting if specified
+    if args.monitor:
+        config.monitoring.monitor = True
     
     try:
-        asyncio.run(
-            run(
-                proxy_group_name=args.proxy_group_name,
-                service_name=args.service_name,
-                controller=args.controller,
-                secret=args.secret,
-                http_proxy=args.http_proxy,
-                interval_sec=args.interval,
-                max_rotations=args.max_rotations,
-                monitor=args.monitor,
-                storage=storage,
-            )
-        )
+        config_file = get_config_file_path()
+        print(f"使用配置文件: {config_file}")
+        asyncio.run(run_multiple_tasks(config))
     except KeyboardInterrupt:
         print("收到 Ctrl-C，退出。")
         raise SystemExit(130)

@@ -20,36 +20,94 @@ pip install .
 
 ### 运行
 
-示例：一次性检测 ChatGPT，成功即退出
+本工具完全基于配置文件模式，可以同时监控多个代理组和服务：
+
+#### 基本使用流程
+
+1. 生成配置文件模板：
 ```bash
-clash_auto_switch "YourGroup" "chatgpt"
+clash_auto_switch --generate-config
 ```
 
-示例：持续监控 Netflix，失败则切换节点
+2. 查看配置文件位置和内容：
 ```bash
-clash_auto_switch "YourGroup" "netflix" --monitor
+clash_auto_switch --show-config
 ```
 
-示例：查看节点可靠性统计
+3. 根据需要编辑配置文件（见下方配置说明）
+
+4. 运行监控：
 ```bash
-clash_auto_switch "YourGroup" "netflix" --show-stats
+# 使用配置文件中的设置运行
+clash_auto_switch
+
+# 强制开启持续监控模式
+clash_auto_switch --monitor
+```
+
+#### 查看统计信息
+
+查看特定代理组和服务的节点可靠性统计：
+```bash
+clash_auto_switch --show-stats "YourGroup" "netflix"
 ```
 
 按 Ctrl-C 可以随时退出。
 
-### 参数说明
+### 配置文件说明
 
-- 必选参数：
-  - `proxy_group_name`：Clash 中要轮换的代理组名称
-  - `service_name`：要检测的服务名
-- 可选参数：
-  - `--controller`（默认 `127.0.0.1:9097`）：Clash External Controller 地址。
-  - `--secret`：若 Clash 开启了 API 密钥，需传入此 Secret。
-  - `--http-proxy`（默认 `http://127.0.0.1:7890`）：探测请求所走的 HTTP 代理（通常指向 Clash 的本地 HTTP 端口）。
-  - `--interval`（默认 `30.0` 秒）：检测/切换的间隔。
-  - `--max-rotations`（默认 `0`）：最大连续切换次数；`0` 表示不限制。达到上限后会短暂等待并继续监控。
-  - `--monitor`（默认关闭）：开启后持续后台监控；关闭时，一旦检测到可用即退出。
-  - `--show-stats`：显示节点可靠性统计信息并退出。
+配置文件自动保存在与节点历史数据相同的位置（跨平台标准数据目录），采用 JSON 格式，包含以下部分：
+
+```json
+{
+  "clash": {
+    "controller": "127.0.0.1:9097",
+    "secret": null,
+    "http_proxy": "http://127.0.0.1:7890"
+  },
+  "monitoring": {
+    "interval_sec": 30.0,
+    "max_rotations": 0,
+    "monitor": true
+  },
+  "tasks": [
+    {
+      "name": "ChatGPT-US",
+      "proxy_group_name": "🇺🇸美国",
+      "service_name": "chatgpt",
+      "enabled": true
+    },
+    {
+      "name": "Netflix-HK", 
+      "proxy_group_name": "🇭🇰香港",
+      "service_name": "netflix",
+      "enabled": true
+    }
+  ]
+}
+```
+
+配置选项说明：
+- `clash.controller`：Clash External Controller 地址
+- `clash.secret`：Clash API 密钥（如未设置则为 null）
+- `clash.http_proxy`：探测请求所走的 HTTP 代理地址
+- `monitoring.interval_sec`：检测间隔（秒）
+- `monitoring.max_rotations`：最大连续切换次数（0 表示无限制）
+- `monitoring.monitor`：是否持续监控
+- `tasks`：监控任务列表
+  - `name`：任务名称（用于日志区分）
+  - `proxy_group_name`：Clash 代理组名称
+  - `service_name`：服务名称
+  - `enabled`：是否启用该任务
+
+### 命令行参数
+
+- `--generate-config`：生成配置文件模板到默认位置
+- `--show-config`：显示当前配置文件位置和内容  
+- `--monitor`：强制开启持续监控模式（覆盖配置文件设置）
+- `--show-stats PROXY_GROUP SERVICE`：显示指定代理组和服务的节点统计信息并退出
+
+所有其他配置（Clash地址、代理端口、检测间隔等）都通过配置文件管理。
 
 ### 支持的服务与别名
 
