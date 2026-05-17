@@ -55,12 +55,14 @@ class NodeHistoryStorage:
     def startup_cleanup(self) -> None:
         """Normalize loaded history and persist it in the current storage format."""
         with self._lock:
-            self._records_by_node = {
+            cleaned_records = {
                 node_name: records
                 for node_name, records in self._records_by_node.items()
                 if node_name and records
             }
-            self._save_to_file()
+            if cleaned_records != self._records_by_node:
+                self._records_by_node = cleaned_records
+                self._save_to_file()
 
     def _record_from_dict(self, record_dict: Dict) -> ServiceRecord:
         """Build a ServiceRecord from current or legacy record dictionaries."""

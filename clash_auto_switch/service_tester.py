@@ -1,20 +1,26 @@
 import asyncio
+import html
 import re
 import argparse
+from dataclasses import dataclass
 from datetime import datetime
 import httpx
-from typing import List, Dict, Optional, Any, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 
 # 定义解锁测试项目的结构
+@dataclass
 class TestResultItem:
-    def __init__(self, name: str, status: str, region: Optional[str] = None, check_time: Optional[str] = None):
-        self.name = name
-        self.status = status
-        self.region = region
-        self.check_time = check_time or get_local_date_string()
+    name: str
+    status: str
+    region: Optional[str] = None
+    check_time: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def __post_init__(self) -> None:
+        if self.check_time is None:
+            self.check_time = get_local_date_string()
+
+    def to_dict(self) -> Dict[str, Optional[str]]:
         return {
             "name": self.name,
             "status": self.status,
@@ -31,10 +37,10 @@ def country_code_to_emoji(country_code: str) -> str:
     country_code = country_code.upper()
     if len(country_code) < 2:
         return ""
-    
+
     c1 = 0x1F1E6 + ord(country_code[0]) - ord('A')
     c2 = 0x1F1E6 + ord(country_code[1]) - ord('A')
-    
+
     return chr(c1) + chr(c2)
 
 # 创建新的HTTP客户端
@@ -44,13 +50,28 @@ def create_http_client(proxy: Optional[str] = None, custom_headers: Optional[Dic
     }
     if custom_headers:
         default_headers.update(custom_headers)
-    
+
     return httpx.AsyncClient(
         proxy=proxy,
         headers=default_headers,
         timeout=30.0,
         verify=False,
         http2=True
+    )
+
+
+def format_result_status(result: TestResultItem) -> str:
+    region = f" ({result.region})" if result.region else ""
+    return f"{result.name}: {result.status}{region}"
+
+
+def normalize_response_text(body: str) -> str:
+    """Normalize escaped page text before keyword matching."""
+    body = html.unescape(body)
+    return re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        lambda match: chr(int(match.group(1), 16)),
+        body,
     )
 
 # 测试哔哩哔哩中国大陆
@@ -90,7 +111,7 @@ async def check_bilibili_hk_mc_tw(proxy: Optional[str] = None) -> TestResultItem
                 status = "Failed"
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
             status = "Failed"
-            
+
     return TestResultItem("哔哩哔哩港澳台", status)
 
 # 合并的ChatGPT检测功能
@@ -98,7 +119,7 @@ async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[TestResult
     async with create_http_client(proxy) as client:
         results = []
         region = None
-        
+
         # 1. 获取国家代码
         try:
             response_country = await client.get("https://chat.openai.com/cdn-cgi/trace")
@@ -142,7 +163,7 @@ async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[TestResult
             pass
 
         results.append(TestResultItem("ChatGPT Web", web_status, region=region))
-        
+
     return results
 
 # 测试Gemini
@@ -155,23 +176,23 @@ async def check_gemini(proxy: Optional[str] = None) -> TestResultItem:
             # 等待完整响应，类似Rust版本的 response.text().await
             response = await client.get(url)
             response.raise_for_status()  # 检查HTTP状态码
-            
+
             # 确保完整读取响应体
             body = response.text
             if not body:
                 return TestResultItem("Gemini", "Failed", region=None)
-            
+
             # 检查是否包含成功标识
             is_ok = "45631641,null,true" in body
             status = "Yes" if is_ok else "No"
-            
+
             # 尝试提取国家代码
             match = re.search(r',2,1,200,"([A-Z]{3})"', body)
             if match:
                 country_code = match.group(1)
                 emoji = country_code_to_emoji(country_code)
                 region = f"{emoji}{country_code}"
-                
+
         except httpx.HTTPStatusError as e:
             status = f"Failed (HTTP {e.response.status_code})"
         except httpx.RequestError as e:
@@ -190,12 +211,12 @@ async def check_youtube_premium(proxy: Optional[str] = None) -> TestResultItem:
         try:
             response = await client.get(url)
             response.raise_for_status()
-            
+
             # 确保完整读取响应体
             body = response.text
             if not body:
                 return TestResultItem("Youtube Premium", "Failed", region=None)
-                
+
             body_lower = body.lower()
 
             if "youtube premium is not available in your country" in body_lower:
@@ -215,6 +236,148 @@ async def check_youtube_premium(proxy: Optional[str] = None) -> TestResultItem:
             status = f"Failed (Error: {str(e)[:50]})"
 
     return TestResultItem("Youtube Premium", status, region=region)
+
+
+def parse_youtube_music_page(body: str) -> tuple[str, Optional[str]]:
+    """Parse YouTube Music availability from the music.youtube.com shell page."""
+    if not body:
+        return "Failed", None
+
+    normalized_body = normalize_response_text(body)
+    body_lower = normalized_body.lower()
+    unavailable_indicators = (
+        "not available in your country",
+        "not available in your region",
+        "所在区域无法使用",
+        "無法在你所在區域使用",
+        "无法在你所在区域使用",
+        "你所在的国家/地区无法使用",
+        "你所在的國家/地區無法使用",
+    )
+    if any(indicator in body_lower for indicator in unavailable_indicators):
+        return "No", None
+
+    unsupported_browser_indicators = (
+        "your browser is not supported",
+        "browser is not supported",
+        "請升級",
+    )
+    if any(indicator in body_lower for indicator in unsupported_browser_indicators):
+        return "Failed (Unsupported Browser)", None
+
+    region = None
+    for pattern in (
+        r'"GL":"([A-Z]{2})"',
+        r'"countryCode":"([A-Z]{2})"',
+        r'"regionCode":"([A-Z]{2})"',
+        r"'country_code': '([A-Z]{2})'",
+    ):
+        match = re.search(pattern, normalized_body)
+        if match:
+            country_code = match.group(1)
+            region = f"{country_code_to_emoji(country_code)}{country_code}"
+            break
+
+    available_indicators = (
+        "music.youtube.com/youtubei/",
+        "innertube_context",
+        "web_remix",
+    )
+    if any(indicator in body_lower for indicator in available_indicators):
+        return "Yes", region
+
+    return "Failed (Unexpected Page)", region
+
+
+def extract_youtube_music_api_config(body: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    normalized_body = normalize_response_text(body)
+
+    api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', normalized_body)
+    version_match = re.search(r'"INNERTUBE_CLIENT_VERSION":"([^"]+)"', normalized_body)
+    gl_match = re.search(r'"gl":"([A-Z]{2})"', normalized_body, re.IGNORECASE)
+
+    return (
+        api_key_match.group(1) if api_key_match else None,
+        version_match.group(1) if version_match else None,
+        gl_match.group(1).upper() if gl_match else None,
+    )
+
+
+def parse_youtube_music_player_response(data: Dict) -> str:
+    playability = data.get("playabilityStatus") or {}
+    status = playability.get("status")
+
+    if status == "OK" and data.get("streamingData"):
+        return "Yes"
+
+    if status in {"UNPLAYABLE", "LOGIN_REQUIRED", "AGE_CHECK_REQUIRED"}:
+        return "No"
+
+    if status:
+        return f"Failed (Player {status})"
+
+    return "Failed (Unexpected Player Response)"
+
+
+# 测试 YouTube Music
+async def check_youtube_music(proxy: Optional[str] = None) -> TestResultItem:
+    url = "https://music.youtube.com/"
+    custom_headers = {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+    }
+    async with create_http_client(proxy, custom_headers) as client:
+        try:
+            response = await client.get(url, follow_redirects=True)
+            response.raise_for_status()
+            status, region = parse_youtube_music_page(response.text)
+            if status != "Yes":
+                return TestResultItem("Youtube Music", status, region=region)
+
+            api_key, client_version, gl = extract_youtube_music_api_config(response.text)
+            if not api_key or not client_version:
+                return TestResultItem("Youtube Music", "Failed (Missing API Config)", region=region)
+
+            player_response = await client.post(
+                f"https://music.youtube.com/youtubei/v1/player?key={api_key}",
+                json={
+                    "context": {
+                        "client": {
+                            "clientName": "WEB_REMIX",
+                            "clientVersion": client_version,
+                            "hl": "zh-CN",
+                            "gl": gl or "US",
+                        }
+                    },
+                    "videoId": "kJQP7kiw5Fk",
+                    "playbackContext": {
+                        "contentPlaybackContext": {
+                            "html5Preference": "HTML5_PREF_WANTS",
+                        }
+                    },
+                },
+                headers={
+                    "Origin": "https://music.youtube.com",
+                    "Referer": "https://music.youtube.com/",
+                },
+            )
+            player_response.raise_for_status()
+            status = parse_youtube_music_player_response(player_response.json())
+        except httpx.HTTPStatusError as e:
+            status = f"Failed (HTTP {e.response.status_code})"
+            region = None
+        except ValueError:
+            status = "Failed (Invalid Player Response)"
+            region = None
+        except httpx.RequestError as e:
+            status = f"Failed (Network: {str(e)[:50]})"
+            region = None
+
+    return TestResultItem("Youtube Music", status, region=region)
 
 
 # 测试动画疯(Bahamut Anime)
@@ -239,12 +402,12 @@ async def check_bahamut_anime(proxy: Optional[str] = None) -> TestResultItem:
             token_url = f"https://ani.gamer.com.tw/ajax/token.php?adID=89422&sn=37783&device={device_id}"
             token_res = await anime_client.get(token_url)
             token_res.raise_for_status()
-            
+
             # 确保完整读取响应
             token_body = token_res.text
             if "animeSn" not in token_body:
                 return TestResultItem("Bahamut Anime", "No")
-            
+
             # 第三步：访问主页获取区域信息
             main_page_res = await anime_client.get("https://ani.gamer.com.tw/")
             main_page_res.raise_for_status()
@@ -254,7 +417,7 @@ async def check_bahamut_anime(proxy: Optional[str] = None) -> TestResultItem:
                 country_code = match.group(1)
                 emoji = country_code_to_emoji(country_code)
                 region = f"{emoji}{country_code}"
-            
+
             status = "Yes"
 
     except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
@@ -300,13 +463,13 @@ async def check_netflix(proxy: Optional[str] = None) -> TestResultItem:
         try:
             res1 = await client.get(url1, timeout=30, follow_redirects=True)
             res2 = await client.get(url2, timeout=30, follow_redirects=True)
-            
+
             status1 = res1.status_code
             status2 = res2.status_code
 
             if status1 == 404 and status2 == 404:
                 return TestResultItem("Netflix", "Originals Only")
-            
+
             if status1 == 403 or status2 == 403:
                  return TestResultItem("Netflix", "No")
 
@@ -323,7 +486,7 @@ async def check_netflix(proxy: Optional[str] = None) -> TestResultItem:
                             return TestResultItem("Netflix", "Yes", region=f"{emoji}{region_code.upper()}")
                 except httpx.RequestError:
                      pass # Fallback to US
-                
+
                 emoji = country_code_to_emoji("us")
                 return TestResultItem("Netflix", "Yes", region=f"{emoji}US")
 
@@ -346,11 +509,11 @@ async def check_disney_plus(proxy: Optional[str] = None) -> TestResultItem:
                 "attributes": {}
             }
             res_device = await client.post(device_api_url, json=device_req_body, headers={"authorization": auth_header})
-            
+
             if res_device.status_code == 403:
                 return TestResultItem("Disney+", "No (IP Banned By Disney+)")
             res_device.raise_for_status()
-            
+
             device_body = res_device.json()
             assertion = device_body.get("assertion")
             if not assertion:
@@ -367,18 +530,18 @@ async def check_disney_plus(proxy: Optional[str] = None) -> TestResultItem:
                 "subject_token_type": "urn:bamtech:params:oauth:token-type:device",
             }
             res_token = await client.post(token_url, data=token_body, headers={"authorization": auth_header})
-            
+
             # 确保完整读取token响应
             token_text = res_token.text
             if "forbidden-location" in token_text or "403 ERROR" in token_text:
                  return TestResultItem("Disney+", "No (IP Banned By Disney+)")
-            
+
             res_token.raise_for_status()
             token_json = res_token.json()
             refresh_token = token_json.get("refresh_token")
             if not refresh_token:
                 return TestResultItem("Disney+", f"Failed (Cannot extract refresh token, status: {res_token.status_code})")
-                
+
             # Step 3: GraphQL for region info
             graphql_url = "https://disney.api.edge.bamgrid.com/graph/v1/device/graphql"
             graphql_payload = {
@@ -386,10 +549,10 @@ async def check_disney_plus(proxy: Optional[str] = None) -> TestResultItem:
                 "variables": {"input": {"refreshToken": refresh_token}}
             }
             res_graphql = await client.post(graphql_url, json=graphql_payload, headers={"authorization": auth_header})
-            
+
             # 确保完整读取GraphQL响应
             graphql_body_text = res_graphql.text
-            
+
             if res_graphql.status_code >= 400:
                  # Fallback to main page check
                 try:
@@ -417,13 +580,13 @@ async def check_disney_plus(proxy: Optional[str] = None) -> TestResultItem:
 
             match_supported = re.search(r'"inSupportedLocation"\s*:\s*(true|false)', graphql_body_text)
             in_supported_location = match_supported and match_supported.group(1) == "true"
-            
+
             res_preview = await client.get("https://disneyplus.com")
             is_unavailable = "preview" in str(res_preview.url) or "unavailable" in str(res_preview.url)
-            
+
             if is_unavailable:
                 return TestResultItem("Disney+", "No")
-                
+
             emoji = country_code_to_emoji(region)
             if in_supported_location:
                 return TestResultItem("Disney+", "Yes", region=f"{emoji}{region}")
@@ -440,12 +603,12 @@ async def check_prime_video(proxy: Optional[str] = None) -> TestResultItem:
         try:
             response = await client.get(url)
             response.raise_for_status()
-            
+
             # 确保完整读取响应
             body = response.text
             if not body:
                 return TestResultItem("Prime Video", "Failed (Empty Response)")
-            
+
             if "isServiceRestricted" in body:
                 return TestResultItem("Prime Video", "No (Service Not Available)")
 
@@ -454,13 +617,58 @@ async def check_prime_video(proxy: Optional[str] = None) -> TestResultItem:
                 region = match_region.group(1)
                 emoji = country_code_to_emoji(region)
                 return TestResultItem("Prime Video", "Yes", region=f"{emoji}{region}")
-            
+
             return TestResultItem("Prime Video", "Failed (Error: PAGE ERROR)")
 
         except httpx.HTTPStatusError as e:
             return TestResultItem("Prime Video", f"Failed (HTTP {e.response.status_code})")
         except httpx.RequestError as e:
             return TestResultItem("Prime Video", f"Failed (Network: {str(e)[:50]})")
+
+
+ServiceChecker = Callable[[Optional[str]], Awaitable[TestResultItem]]
+
+SERVICE_ALIASES = {
+    "bilibili_cn": "bilibili_mainland",
+    "bilibili_mainland": "bilibili_mainland",
+    "bilibili_hk": "bilibili_hk_mc_tw",
+    "bilibili_hk_mc_tw": "bilibili_hk_mc_tw",
+    "chatgpt": "chatgpt",
+    "openai": "chatgpt",
+    "gemini": "gemini",
+    "youtube": "youtube_premium",
+    "youtube_premium": "youtube_premium",
+    "youtube_music": "youtube_music",
+    "youtubemusic": "youtube_music",
+    "youtube-music": "youtube_music",
+    "ytmusic": "youtube_music",
+    "bahamut": "bahamut_anime",
+    "bahamut_anime": "bahamut_anime",
+    "netflix": "netflix",
+    "disney": "disney_plus",
+    "disney+": "disney_plus",
+    "disney_plus": "disney_plus",
+    "prime": "prime_video",
+    "prime_video": "prime_video",
+    "amazon_prime": "prime_video",
+}
+
+SERVICE_CHECKERS: Dict[str, ServiceChecker] = {
+    "bilibili_mainland": check_bilibili_china_mainland,
+    "bilibili_hk_mc_tw": check_bilibili_hk_mc_tw,
+    "gemini": check_gemini,
+    "youtube_premium": check_youtube_premium,
+    "youtube_music": check_youtube_music,
+    "bahamut_anime": check_bahamut_anime,
+    "netflix": check_netflix,
+    "disney_plus": check_disney_plus,
+    "prime_video": check_prime_video,
+}
+
+
+def normalize_service_name(service_name: str) -> str:
+    key = service_name.strip().lower().replace(" ", "_")
+    return SERVICE_ALIASES.get(key, key)
 
 
 async def probe_service(
@@ -473,66 +681,18 @@ async def probe_service(
     For ChatGPT, unlocked if either iOS/Web returns Yes.
     """
 
-    key = service_name.strip().lower()
-    # Normalize common aliases
-    alias = {
-        "bilibili_cn": "bilibili_mainland",
-        "bilibili_mainland": "bilibili_mainland",
-        "bilibili_hk": "bilibili_hk_mc_tw",
-        "bilibili_hk_mc_tw": "bilibili_hk_mc_tw",
-        "chatgpt": "chatgpt",
-        "openai": "chatgpt",
-        "gemini": "gemini",
-        "youtube": "youtube_premium",
-        "youtube_premium": "youtube_premium",
-        "bahamut": "bahamut_anime",
-        "bahamut_anime": "bahamut_anime",
-        "netflix": "netflix",
-        "disney": "disney_plus",
-        "disney+": "disney_plus",
-        "disney_plus": "disney_plus",
-        "prime": "prime_video",
-        "prime_video": "prime_video",
-        "amazon_prime": "prime_video",
-    }
+    norm = normalize_service_name(service_name)
 
-    norm = alias.get(key, key)
-
-    if norm == "bilibili_mainland":
-        result = await check_bilibili_china_mainland(proxy_url)
-        return result.status == "Yes", f"{result.name}: {result.status}"
-    if norm == "bilibili_hk_mc_tw":
-        result = await check_bilibili_hk_mc_tw(proxy_url)
-        return result.status == "Yes", f"{result.name}: {result.status}"
     if norm == "chatgpt":
         items = await check_chatgpt_combined(proxy_url)
         unlocked = any(item.status == "Yes" for item in items)
-        status_text = ", ".join(f"{i.name}: {i.status}{(' (' + i.region + ')') if i.region else ''}" for i in items)
+        status_text = ", ".join(format_result_status(item) for item in items)
         return unlocked, status_text
-    if norm == "gemini":
-        result = await check_gemini(proxy_url)
-        region = f" ({result.region})" if result.region else ""
-        return result.status == "Yes", f"{result.name}: {result.status}{region}"
-    if norm == "youtube_premium":
-        result = await check_youtube_premium(proxy_url)
-        region = f" ({result.region})" if result.region else ""
-        return result.status == "Yes", f"{result.name}: {result.status}{region}"
-    if norm == "bahamut_anime":
-        result = await check_bahamut_anime(proxy_url)
-        region = f" ({result.region})" if result.region else ""
-        return result.status == "Yes", f"{result.name}: {result.status}{region}"
-    if norm == "netflix":
-        result = await check_netflix(proxy_url)
-        region = f" ({result.region})" if result.region else ""
-        return result.status == "Yes", f"{result.name}: {result.status}{region}"
-    if norm == "disney_plus":
-        result = await check_disney_plus(proxy_url)
-        region = f" ({result.region})" if result.region else ""
-        return result.status == "Yes", f"{result.name}: {result.status}{region}"
-    if norm == "prime_video":
-        result = await check_prime_video(proxy_url)
-        region = f" ({result.region})" if result.region else ""
-        return result.status == "Yes", f"{result.name}: {result.status}{region}"
+
+    checker = SERVICE_CHECKERS.get(norm)
+    if checker:
+        result = await checker(proxy_url)
+        return result.status == "Yes", format_result_status(result)
 
     return False, f"未知服务: {service_name}"
 
@@ -543,12 +703,12 @@ async def probe_service_multi(
     count: int = 3
 ) -> Tuple[bool, str]:
     """连续多次检测服务，任意失败则返回失败。
-    
+
     Args:
         service_name: 服务名称
         proxy_url: 代理URL
         count: 检测次数，默认3次
-        
+
     Returns:
         Tuple[bool, str]: (是否全部成功, 状态描述)
     """
@@ -562,7 +722,7 @@ async def probe_service_multi(
                 await asyncio.sleep(1.0)
         except Exception as e:
             return False, f"第{i+1}次检测异常: {e}"
-    
+
     return True, status
 
 
@@ -574,21 +734,22 @@ async def main(proxy: Optional[str]):
         check_chatgpt_combined(proxy),
         check_gemini(proxy),
         check_youtube_premium(proxy),
+        check_youtube_music(proxy),
         check_bahamut_anime(proxy),
         check_netflix(proxy),
         check_disney_plus(proxy),
         check_prime_video(proxy),
     ]
-    
+
     results = await asyncio.gather(*tasks)
-    
+
     final_results = []
     for result in results:
         if isinstance(result, list):
             final_results.extend([item.to_dict() for item in result])
         else:
             final_results.append(result.to_dict())
-            
+
     # 打印结果
     import json
     print(json.dumps(final_results, indent=2, ensure_ascii=False))
@@ -597,5 +758,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run unlock tests for various streaming services.')
     parser.add_argument('--proxy', type=str, default='http://127.0.0.1:7890', help='Proxy to use for the requests, e.g., http://127.0.0.1:7890')
     args = parser.parse_args()
-    
+
     asyncio.run(main(args.proxy))

@@ -110,7 +110,6 @@ async def select_next_proxy_in_group(
     current = group_info.get("now")
 
     # Filter candidates: check if alive and remove explicitly dead ones
-    print(f'Chekcing ProxyGroup: {proxy_group_name}')
     alive_candidates = []
     for candidate in candidates:
         try:
