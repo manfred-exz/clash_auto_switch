@@ -24,9 +24,170 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator, Dict, Optional, Set
+import re
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Dict, Optional
 
 import httpx
+
+
+_LOG_PATTERN = re.compile(
+    r"^\[(?P<network>[^\]]+)\]\s+"
+    r"(?:(?:dial\s+(?P<dial_outbound>.+?)\s+\(match\s+(?P<dial_rule>.+?)\)\s+))?"
+    r"(?P<source>.+?)\s+-->\s+(?P<destination>.+?)"
+    r"(?:\s+match\s+(?P<rule>.+?)\s+using\s+(?P<outbound>.+)|\s+error:\s+(?P<error>.+))$"
+)
+
+
+@dataclass(frozen=True)
+class ClashEndpoint:
+    """One side of a Clash connection log entry."""
+
+    host: str
+    port: Optional[int] = None
+    process: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ClashRuleMatch:
+    """Rule information extracted from a Clash log line."""
+
+    raw: str
+    rule_type: str
+    rule_value: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ClashOutbound:
+    """Outbound policy or selected node extracted from a Clash log line."""
+
+    raw: str
+    policy: str
+    selected: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ClashLogEntry:
+    """Structured Clash log entry.
+
+    Supports both successful connection logs:
+      [TCP] src:port(process) --> dst:port match GeoSite(google) using Google[node]
+
+    and failed dial logs:
+      [TCP] dial DIRECT (match GeoIP/cn) src:port(process) --> dst:port error: ...
+    """
+
+    type: str
+    payload: str
+    network: Optional[str] = None
+    source: Optional[ClashEndpoint] = None
+    destination: Optional[ClashEndpoint] = None
+    rule: Optional[ClashRuleMatch] = None
+    outbound: Optional[ClashOutbound] = None
+    error: Optional[str] = None
+
+    @property
+    def is_connection_log(self) -> bool:
+        return self.source is not None and self.destination is not None
+
+    @property
+    def is_error(self) -> bool:
+        return self.error is not None
+
+    @classmethod
+    def from_api_item(cls, item: Dict[str, Any]) -> "ClashLogEntry":
+        log_type = str(item.get("type", ""))
+        payload = str(item.get("payload", ""))
+        parsed = parse_clash_log_payload(payload)
+        return cls(type=log_type, payload=payload, **parsed)
+
+
+def parse_clash_endpoint(value: str) -> ClashEndpoint:
+    """Parse host:port(process) endpoint text from Clash logs."""
+
+    endpoint_text = value.strip()
+    process: Optional[str] = None
+    process_match = re.match(r"^(?P<address>.+)\((?P<process>[^()]*)\)$", endpoint_text)
+    if process_match:
+        endpoint_text = process_match.group("address").strip()
+        process = process_match.group("process") or None
+
+    if endpoint_text.startswith("["):
+        address_match = re.match(r"^\[(?P<host>[^\]]+)\](?::(?P<port>\d+))?$", endpoint_text)
+        if address_match:
+            port = address_match.group("port")
+            return ClashEndpoint(
+                host=address_match.group("host"),
+                port=int(port) if port is not None else None,
+                process=process,
+            )
+
+    host = endpoint_text
+    port: Optional[int] = None
+    if ":" in endpoint_text:
+        possible_host, possible_port = endpoint_text.rsplit(":", 1)
+        if possible_port.isdigit():
+            host = possible_host
+            port = int(possible_port)
+
+    return ClashEndpoint(host=host, port=port, process=process)
+
+
+def parse_clash_rule(value: str) -> ClashRuleMatch:
+    """Parse rule text like GeoSite(google), GeoIP/cn, or Match."""
+
+    raw = value.strip()
+    function_match = re.match(r"^(?P<type>[^()]+)\((?P<value>.*)\)$", raw)
+    if function_match:
+        return ClashRuleMatch(
+            raw=raw,
+            rule_type=function_match.group("type"),
+            rule_value=function_match.group("value") or None,
+        )
+
+    if "/" in raw:
+        rule_type, rule_value = raw.split("/", 1)
+        return ClashRuleMatch(raw=raw, rule_type=rule_type, rule_value=rule_value or None)
+
+    return ClashRuleMatch(raw=raw, rule_type=raw)
+
+
+def parse_clash_outbound(value: str) -> ClashOutbound:
+    """Parse outbound text like DIRECT or Google[yushe | 狮城 02]."""
+
+    raw = value.strip()
+    selected_match = re.match(r"^(?P<policy>.+?)\[(?P<selected>.*)\]$", raw)
+    if selected_match:
+        return ClashOutbound(
+            raw=raw,
+            policy=selected_match.group("policy"),
+            selected=selected_match.group("selected") or None,
+        )
+
+    return ClashOutbound(raw=raw, policy=raw)
+
+
+def parse_clash_log_payload(payload: str) -> Dict[str, Any]:
+    """Parse a Clash log payload into dataclass-ready fields.
+
+    Unknown payload formats are kept as raw payload by returning empty fields.
+    """
+
+    match = _LOG_PATTERN.match(payload.strip())
+    if not match:
+        return {}
+
+    rule_text = match.group("rule") or match.group("dial_rule")
+    outbound_text = match.group("outbound") or match.group("dial_outbound")
+
+    return {
+        "network": match.group("network"),
+        "source": parse_clash_endpoint(match.group("source")),
+        "destination": parse_clash_endpoint(match.group("destination")),
+        "rule": parse_clash_rule(rule_text) if rule_text else None,
+        "outbound": parse_clash_outbound(outbound_text) if outbound_text else None,
+        "error": match.group("error"),
+    }
 
 
 class ClashClient:
@@ -133,11 +294,12 @@ class ClashClient:
                     except json.JSONDecodeError:
                         continue
 
-    async def iter_logs(self, level: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
+    async def iter_logs(self, level: Optional[str] = None) -> AsyncIterator[ClashLogEntry]:
         """Stream realtime logs.
 
         GET /logs?level={error|warning|info|debug}
-        Yields dicts like {"type": "info", "payload": "..."}
+        Yields structured ClashLogEntry objects parsed from dicts like
+        {"type": "info", "payload": "..."}.
         Docs: https://clash.gitbook.io/doc/restful-api/common
         """
         params: Dict[str, Any] = {}
@@ -150,10 +312,10 @@ class ClashClient:
                 if not line:
                     continue
                 try:
-                    yield json.loads(line)
+                    yield ClashLogEntry.from_api_item(json.loads(line))
                 except json.JSONDecodeError:
                     try:
-                        yield json.loads(line.strip())
+                        yield ClashLogEntry.from_api_item(json.loads(line.strip()))
                     except json.JSONDecodeError:
                         continue
 
@@ -255,9 +417,28 @@ class ClashClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_default_proxy_group(self) -> Optional[str]:
+        rules = await self.get_rules()
+        if not rules:
+            return None
+
+        last_rule = rules[-1]
+        if last_rule['type'].lower() == 'match':
+            return last_rule['proxy']
+        else:
+            return None
+
 
 __all__ = [
+    "ClashEndpoint",
+    "ClashRuleMatch",
+    "ClashOutbound",
+    "ClashLogEntry",
     "ClashClient",
+    "parse_clash_endpoint",
+    "parse_clash_rule",
+    "parse_clash_outbound",
+    "parse_clash_log_payload",
 ]
 
 
@@ -265,11 +446,10 @@ __all__ = [
 if __name__ == "__main__":
     import asyncio
     import json
-    from clash_api import ClashClient
 
     async def main():
         async with ClashClient.from_external_controller("127.0.0.1:9097", secret='set-your-secret') as client:
-            proxies = await client.get_proxy('CherryPick')
+            proxies = await client.get_proxy('Youtube-Music')
             with open('proxy.json', 'w', encoding='utf-8') as f:
                 json.dump(proxies, f, indent=2, ensure_ascii=False)
 

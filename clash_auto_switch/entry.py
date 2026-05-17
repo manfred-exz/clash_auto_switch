@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    
+
     parser.add_argument(
         "--once",
         action="store_true",
@@ -71,96 +71,87 @@ def parse_args() -> argparse.Namespace:
 
 
 def show_all_statistics() -> None:
-    """Display statistics for all services with data."""
+    """Display simple statistics for all services with data."""
     storage = NodeHistoryStorage()
-    summary = storage.get_all_services_summary()
-    
-    if summary['total_services'] == 0:
+
+    # Since we removed complex statistics, show basic info
+    print("\n📊 节点记录统计 (简化版)")
+    print("=" * 60)
+
+    # Collect services data from new storage format
+    services_data = {}
+    for node_name, service_records in storage._records_by_node.items():
+        for record in service_records:
+            service_name = record.service_name
+            if service_name not in services_data:
+                services_data[service_name] = []
+            services_data[service_name].append((node_name, record))
+
+    if not services_data:
         print("\n暂无任何服务的统计数据。")
         print("运行监控任务后将自动记录节点性能数据。")
+        print("=" * 60)
         return
-    
-    print(f"\n🚀 总共有 {summary['total_services']} 个服务的统计数据")
-    print("=" * 120)
-    
-    for service in summary['services']:
-        proxy_group = service['proxy_group']
-        service_name = service['service_name']
-        total_nodes = service['total_nodes']
-        total_checks = service['total_checks']
-        success_rate = service['success_rate']
-        
-        print(f"\n📋 [{proxy_group:<15}] {service_name}")
-        print(f"    节点数: {total_nodes:3d} | 检测次数: {total_checks:5d} | 成功率: {success_rate:6.2%}")
-        
-        # Get detailed statistics to show top 5 most reliable nodes
-        detailed_stats = storage.get_statistics(proxy_group, service_name)
-        rankings = detailed_stats.get('reliability_rankings', [])
-        
-        if rankings:
-            print("    🏆 前5个最可靠节点:")
-            for i, ranking in enumerate(rankings[:5], 1):
-                node_name = ranking['node']
-                reliability = ranking['reliability_score']
-                node_success_rate = ranking['success_rate']
-                total_node_checks = ranking['total_checks']
-                status_emoji = "✅" if ranking['current_status'] == "available" else "❌"
-                
-                print(f"       {i}. {node_name:<20} | "
-                      f"可靠性: {reliability:.3f} | "
-                      f"成功率: {node_success_rate:6.2%} | "
-                      f"检测: {total_node_checks:3d}次 {status_emoji}")
-        else:
-            print("    🏆 前5个最可靠节点: 暂无数据")
-    
-    print("=" * 120)
-    print("\n💡 使用 'clash_auto_switch --show-stats-detail PROXY_GROUP SERVICE' 查看详细统计")
+
+    for service_name, node_records in services_data.items():
+        print(f"\n📋 服务: {service_name}")
+        print(f"    节点数: {len(node_records)}")
+
+        # Sort by reliability score and show top 3
+        node_records.sort(key=lambda x: x[1].reliability_score, reverse=True)
+
+        print("    🏆 前3个最可靠节点:")
+        for i, (node_name, record) in enumerate(node_records[:3], 1):
+            success_rate = (record.successful_checks / record.total_checks
+                           if record.total_checks > 0 else 0.0)
+            status_emoji = "✅" if record.status == "available" else "❌"
+            print(f"       {i}. {node_name[:30]:<30} | "
+                  f"可靠性: {record.reliability_score:.3f} | "
+                  f"成功率: {success_rate:6.2%} | "
+                  f"检测: {record.total_checks:3d}次 {status_emoji}")
+
+    print("=" * 60)
 
 
-def show_detailed_statistics(proxy_group_name: str, service_name: str) -> None:
+def show_detailed_statistics(service_name: str, proxy_group_name: str | None = None) -> None:
     """Display detailed statistics for the given proxy group and service."""
     storage = NodeHistoryStorage()
-    stats = storage.get_statistics(proxy_group_name, service_name)
-    
-    print(f"\n=== 详细统计信息: {proxy_group_name} / {service_name} ===")
-    print(f"总节点数: {stats['total_nodes']}")
-    print(f"总检测次数: {stats['total_checks']}")
-    print(f"整体成功率: {stats['success_rate']:.2%}")
-    
-    if stats['most_reliable_node']:
-        score = stats['highest_reliability_score']
-        print(f"最可靠节点: {stats['most_reliable_node']} (可靠性评分: {score:.3f})")
-    
-    if stats['last_successful_node']:
-        print(f"最近成功节点: {stats['last_successful_node']}")
-    
-    # Show reliability rankings
-    rankings = stats.get('reliability_rankings', [])
-    if rankings:
-        print("\n📊 节点可靠性排名:")
-        for i, ranking in enumerate(rankings[:10], 1):  # Show top 10
-            status_emoji = "✅" if ranking['current_status'] == "available" else "❌"
-            print(f"  {i:2d}. {ranking['node']:<20} "
-                  f"可靠性: {ranking['reliability_score']:.3f} "
-                  f"成功率: {ranking['success_rate']:.2%} "
-                  f"检测次数: {ranking['total_checks']:3d} "
-                  f"{status_emoji}")
-    
-    print("\n📈 详细统计:")
-    for node, node_stats in stats.get('node_stats', {}).items():
-        reliability = node_stats.get('reliability_score', 0.0)
-        success_rate = node_stats['success_rate']
-        status_emoji = "✅" if node_stats['current_status'] == "available" else "❌"
-        print(f"  {node}: "
-              f"可靠性评分 {reliability:.3f} | "
-              f"成功率 {success_rate:.2%} ({node_stats['successful']}/{node_stats['total']}) | "
-              f"检测次数 {node_stats.get('total_checks', 0)} {status_emoji}")
+    node_records = storage.get_records_by_service(service_name, proxy_group_name)
+
+    if not node_records:
+        print(f"\n❌ 没有找到服务 {service_name} 的数据")
+        return
+
+    print(f"\n=== 详细统计信息: {service_name} ===")
+    print(f"总节点数: {len(node_records)}")
+
+    total_checks = sum(record.total_checks for record in node_records)
+    total_successful = sum(record.successful_checks for record in node_records)
+    overall_success_rate = total_successful / total_checks if total_checks > 0 else 0.0
+
+    print(f"总检测次数: {total_checks}")
+    print(f"整体成功率: {overall_success_rate:.2%}")
+
+    if node_records:
+        best_node_name, best_record = node_records[0]  # Already sorted by reliability
+        print(f"最可靠节点: {best_node_name} (可靠性评分: {best_record.reliability_score:.3f})")
+
+    print("\n📊 节点可靠性排名:")
+    for i, (node_name, record) in enumerate(node_records[:10], 1):  # Show top 10
+        success_rate = (record.successful_checks / record.total_checks
+                       if record.total_checks > 0 else 0.0)
+        status_emoji = "✅" if record.status == "available" else "❌"
+        print(f"  {i:2d}. {node_name:<30} "
+              f"可靠性: {record.reliability_score:.3f} "
+              f"成功率: {success_rate:.2%} "
+              f"检测次数: {record.total_checks:3d} "
+              f"{status_emoji}")
 
 
 def generate_config_template() -> str:
     """Generate configuration template file to the standard location."""
     template_content = get_template_config()
-    
+
     if save_config(template_content):
         config_file = get_config_file_path()
         print(f"配置文件模板已生成: {config_file}")
@@ -174,7 +165,7 @@ def show_config_info() -> None:
     """Display current configuration file location and content."""
     config_file = get_config_file_path()
     print(f"配置文件位置: {config_file}")
-    
+
     if has_config():
         print("配置文件内容:")
         data = load_config()
@@ -186,12 +177,12 @@ def show_config_info() -> None:
 def main() -> None:
     """Main entry point for the application."""
     args = parse_args()
-    
+
     # Handle utility operations
     if args.generate_config:
         generate_config_template()
         return
-    
+
     if args.show_config:
         show_config_info()
         return
@@ -200,32 +191,32 @@ def main() -> None:
         get_data_file_path().unlink(missing_ok=True)
         print("节点统计信息已清除")
         return
-    
+
     if args.show_stats:
         show_all_statistics()
         return
-    
+
     if args.show_stats_detail:
         proxy_group_name, service_name = args.show_stats_detail
-        show_detailed_statistics(proxy_group_name, service_name)
+        show_detailed_statistics(service_name, proxy_group_name)
         return
-    
+
     # Load configuration file
     if not has_config():
         print("错误: 配置文件不存在")
         print("使用 --generate-config 创建配置文件")
         print("使用 --show-config 查看配置文件信息")
         return
-    
+
     config = load_app_config()
     if not config:
         print("错误: 配置文件为空或格式错误")
         return
-    
+
     # Override monitor setting if specified
     if args.once:
         config.monitoring.once = True
-    
+
     try:
         config_file = get_config_file_path()
         print(f"使用配置文件: {config_file}")
