@@ -1,8 +1,11 @@
 import unittest
 
 from clash_auto_switch.service_tester import (
+    CLAUDE_BLOCKED_CODES,
+    SERVICE_CHECKERS,
     extract_youtube_music_api_config,
     normalize_service_name,
+    parse_trace_country,
     parse_youtube_music_page,
     parse_youtube_music_player_response,
 )
@@ -71,6 +74,21 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertEqual(normalize_service_name("YoutubeMusic"), "youtube_music")
         self.assertEqual(normalize_service_name("youtube-music"), "youtube_music")
         self.assertEqual(normalize_service_name("ytmusic"), "youtube_music")
+
+    def test_service_checker_registration_defaults(self) -> None:
+        self.assertIn("chatgpt", SERVICE_CHECKERS)
+        self.assertIn("claude", SERVICE_CHECKERS)
+        self.assertNotIn("bilibili_mainland", SERVICE_CHECKERS)
+        self.assertNotIn("bilibili_hk_mc_tw", SERVICE_CHECKERS)
+
+    def test_claude_aliases_and_blocked_codes(self) -> None:
+        self.assertEqual(normalize_service_name("anthropic"), "claude")
+        self.assertIn("CN", CLAUDE_BLOCKED_CODES)
+        self.assertIn("HK", CLAUDE_BLOCKED_CODES)
+
+    def test_parse_trace_country(self) -> None:
+        self.assertEqual(parse_trace_country("ip=1.1.1.1\nloc=sg\n"), "SG")
+        self.assertIsNone(parse_trace_country("ip=1.1.1.1\n"))
 
     def test_extract_youtube_music_api_config(self) -> None:
         self.assertEqual(

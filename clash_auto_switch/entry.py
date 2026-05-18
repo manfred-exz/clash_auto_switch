@@ -8,6 +8,7 @@ import json
 
 from clash_auto_switch.monitor import (
     load_app_config,
+    run_auto_tasks,
     run_multiple_tasks,
 )
 from clash_auto_switch.storage import NodeHistoryStorage
@@ -34,6 +35,12 @@ def parse_args() -> argparse.Namespace:
         "--once",
         action="store_true",
         help="只运行一次，不持续监控",
+        default=False,
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="根据 Clash 实时连接日志自动触发服务检测",
         default=False,
     )
     parser.add_argument(
@@ -220,7 +227,10 @@ def main() -> None:
     try:
         config_file = get_config_file_path()
         print(f"使用配置文件: {config_file}")
-        asyncio.run(run_multiple_tasks(config))
+        if args.auto:
+            asyncio.run(run_auto_tasks(config))
+        else:
+            asyncio.run(run_multiple_tasks(config))
     except KeyboardInterrupt:
         print("收到 Ctrl-C，退出。")
         raise SystemExit(130)

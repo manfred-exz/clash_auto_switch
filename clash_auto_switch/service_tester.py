@@ -65,6 +65,14 @@ def format_result_status(result: TestResultItem) -> str:
     return f"{result.name}: {result.status}{region}"
 
 
+def parse_trace_country(body: str) -> Optional[str]:
+    for line in body.splitlines():
+        if line.startswith("loc="):
+            country_code = line.removeprefix("loc=").strip().upper()
+            return country_code or None
+    return None
+
+
 def normalize_response_text(body: str) -> str:
     """Normalize escaped page text before keyword matching."""
     body = html.unescape(body)
@@ -114,10 +122,9 @@ async def check_bilibili_hk_mc_tw(proxy: Optional[str] = None) -> TestResultItem
 
     return TestResultItem("哔哩哔哩港澳台", status)
 
-# 合并的ChatGPT检测功能
-async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[TestResultItem]:
+# ChatGPT Web 检测
+async def check_chatgpt(proxy: Optional[str] = None) -> TestResultItem:
     async with create_http_client(proxy) as client:
-        results = []
         region = None
 
         # 1. 获取国家代码
@@ -132,24 +139,7 @@ async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[TestResult
         except httpx.RequestError:
             pass
 
-        # 2. 测试 ChatGPT iOS
-        ios_status = "Failed"
-        try:
-            response_ios = await client.get("https://ios.chat.openai.com/")
-            response_ios.raise_for_status()
-            body_lower = response_ios.text.lower()
-            if "you may be connected to a disallowed isp" in body_lower:
-                ios_status = "Disallowed ISP"
-            elif "request is not allowed. please try again later." in body_lower:
-                ios_status = "Yes"
-            elif "sorry, you have been blocked" in body_lower:
-                ios_status = "Blocked"
-        except (httpx.RequestError, httpx.HTTPStatusError):
-            pass
-
-        results.append(TestResultItem("ChatGPT iOS", ios_status, region=region))
-
-        # 3. 测试 ChatGPT Web
+        # 2. 测试 ChatGPT Web
         web_status = "Failed"
         try:
             response_web = await client.get("https://api.openai.com/compliance/cookie_requirements")
@@ -162,9 +152,29 @@ async def check_chatgpt_combined(proxy: Optional[str] = None) -> List[TestResult
         except (httpx.RequestError, httpx.HTTPStatusError):
             pass
 
-        results.append(TestResultItem("ChatGPT Web", web_status, region=region))
+    return TestResultItem("ChatGPT Web", web_status, region=region)
 
-    return results
+
+CLAUDE_BLOCKED_CODES = {"AF", "BY", "CN", "CU", "HK", "IR", "KP", "MO", "RU", "SY"}
+
+
+# Claude 检测
+async def check_claude(proxy: Optional[str] = None) -> TestResultItem:
+    url = "https://claude.ai/cdn-cgi/trace"
+    async with create_http_client(proxy) as client:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            country_code = parse_trace_country(response.text)
+            if not country_code:
+                return TestResultItem("Claude", "Failed")
+
+            emoji = country_code_to_emoji(country_code)
+            status = "No" if country_code in CLAUDE_BLOCKED_CODES else "Yes"
+            return TestResultItem("Claude", status, region=f"{emoji}{country_code}")
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            return TestResultItem("Claude", "Failed")
+
 
 # 测试Gemini
 async def check_gemini(proxy: Optional[str] = None) -> TestResultItem:
@@ -635,6 +645,8 @@ SERVICE_ALIASES = {
     "bilibili_hk_mc_tw": "bilibili_hk_mc_tw",
     "chatgpt": "chatgpt",
     "openai": "chatgpt",
+    "claude": "claude",
+    "anthropic": "claude",
     "gemini": "gemini",
     "youtube": "youtube_premium",
     "youtube_premium": "youtube_premium",
@@ -654,8 +666,10 @@ SERVICE_ALIASES = {
 }
 
 SERVICE_CHECKERS: Dict[str, ServiceChecker] = {
-    "bilibili_mainland": check_bilibili_china_mainland,
-    "bilibili_hk_mc_tw": check_bilibili_hk_mc_tw,
+    # "bilibili_mainland": check_bilibili_china_mainland,
+    # "bilibili_hk_mc_tw": check_bilibili_hk_mc_tw,
+    "chatgpt": check_chatgpt,
+    "claude": check_claude,
     "gemini": check_gemini,
     "youtube_premium": check_youtube_premium,
     "youtube_music": check_youtube_music,
@@ -678,16 +692,9 @@ async def probe_service(
     """Return (is_unlocked, human_status).
 
     The service is considered unlocked only when status == "Yes".
-    For ChatGPT, unlocked if either iOS/Web returns Yes.
     """
 
     norm = normalize_service_name(service_name)
-
-    if norm == "chatgpt":
-        items = await check_chatgpt_combined(proxy_url)
-        unlocked = any(item.status == "Yes" for item in items)
-        status_text = ", ".join(format_result_status(item) for item in items)
-        return unlocked, status_text
 
     checker = SERVICE_CHECKERS.get(norm)
     if checker:
@@ -729,9 +736,8 @@ async def probe_service_multi(
 async def main(proxy: Optional[str]):
     # 每个检测函数现在都使用独立的客户端
     tasks = [
-        check_bilibili_china_mainland(proxy),
-        check_bilibili_hk_mc_tw(proxy),
-        check_chatgpt_combined(proxy),
+        check_chatgpt(proxy),
+        check_claude(proxy),
         check_gemini(proxy),
         check_youtube_premium(proxy),
         check_youtube_music(proxy),
@@ -745,10 +751,7 @@ async def main(proxy: Optional[str]):
 
     final_results = []
     for result in results:
-        if isinstance(result, list):
-            final_results.extend([item.to_dict() for item in result])
-        else:
-            final_results.append(result.to_dict())
+        final_results.append(result.to_dict())
 
     # 打印结果
     import json

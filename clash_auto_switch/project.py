@@ -91,8 +91,8 @@ def get_template_config() -> dict:
                 "enabled": False
             },
             {
-                "proxy_group_name": "🇯🇵日本", 
-                "service_name": "youtube_premium",
+                "proxy_group_name": "Youtube-Music",
+                "service_name": "youtube_music",
                 "enabled": False
             },
         ]
