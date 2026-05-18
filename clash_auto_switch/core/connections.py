@@ -3,7 +3,7 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-from clash_auto_switch.core.clash_api import ClashClient
+from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.defs import ProxyServicePair
 
 
@@ -76,7 +76,7 @@ def connection_matches_service(connection: dict[str, Any], service_name: str) ->
 
 
 async def close_service_connections(
-    client: ClashClient,
+    client: ClashProxyState,
     service_name: str,
 ) -> int:
     """Close active Clash connections that match a service's known host patterns."""
@@ -103,14 +103,14 @@ async def close_service_connections(
 
 
 async def close_task_service_connections(
-    client: ClashClient,
+    client: ClashProxyState,
     task: ProxyServicePair,
 ) -> int:
     return await close_service_connections(client, task.service_name)
 
 
 async def close_task_service_connections_best_effort(
-    client: ClashClient,
+    client: ClashProxyState,
     task: ProxyServicePair,
     event_handler: Optional[EventFunc] = None,
 ) -> int:

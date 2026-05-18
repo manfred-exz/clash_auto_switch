@@ -11,14 +11,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from clash_auto_switch.core.clash_state import ClashProxyState
+from clash_auto_switch.core.clash_state import ProxyGroupState
 from clash_auto_switch.defs import ProxyServicePair, ServiceRecord
 from clash_auto_switch.tui.keyboard import KeyboardInput
 from clash_auto_switch.core.storage import NodeHistoryStorage
 
 
 SwitchNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
-ToggleNodeDisabledFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
+DisableNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 
 MIN_SERVICE_ROWS = 4
 MIN_EVENT_LINES = 4
@@ -32,7 +32,6 @@ class NodeScore:
     status: str = "unknown"
     total_checks: int = 0
     successful_checks: int = 0
-    disabled: bool = False
 
     @property
     def success_rate(self) -> float:
@@ -81,20 +80,16 @@ class MonitorTui:
             self._services[service_name].last_status = message
         self.refresh()
 
-    async def refresh_service(
+    def update_service(
         self,
-        clash: ClashProxyState,
         task: ProxyServicePair,
+        group_state: ProxyGroupState,
         storage: NodeHistoryStorage,
+        *,
+        disabled_node_names: set[str] | None = None,
     ) -> None:
         service = self._services.get(task.service_name)
         if service is None:
-            return
-
-        try:
-            group_state = await clash.get_proxy_group(task.proxy_group_name)
-        except Exception as exc:
-            self.event(task.service_name, f"读取代理组失败: {exc}", level="warning")
             return
 
         service.current_node = group_state.now
@@ -104,6 +99,7 @@ class MonitorTui:
             service_name=task.service_name,
             proxy_group_name=task.proxy_group_name,
             storage=storage,
+            disabled_node_names=disabled_node_names or set(),
         )
         if service.nodes:
             service.selected_node_index = min(service.selected_node_index, len(service.nodes) - 1)
@@ -114,7 +110,7 @@ class MonitorTui:
     async def run_interaction(
         self,
         switch_node: SwitchNodeFunc,
-        toggle_node_disabled: Optional[ToggleNodeDisabledFunc] = None,
+        disable_node: Optional[DisableNodeFunc] = None,
     ) -> None:
         with KeyboardInput() as keyboard:
             while True:
@@ -138,7 +134,7 @@ class MonitorTui:
                     except Exception as exc:
                         self.event(task.service_name, f"手动切换失败 | {exc}")
                 if action == "toggle_disabled":
-                    if toggle_node_disabled is None:
+                    if disable_node is None:
                         self.event("system", "当前模式不支持禁用节点")
                         continue
                     selection = self.selected_node()
@@ -147,7 +143,7 @@ class MonitorTui:
                         continue
                     task, node_name = selection
                     try:
-                        await toggle_node_disabled(task, node_name)
+                        await disable_node(task, node_name)
                     except Exception as exc:
                         self.event(task.service_name, f"禁用节点失败 | {exc}")
 
@@ -284,7 +280,7 @@ class MonitorTui:
         text.append(" Enter ", style="bold cyan")
         text.append("切换  ")
         text.append(" d ", style="bold cyan")
-        text.append("禁用/启用  ")
+        text.append("禁用  ")
         text.append(" q ", style="bold cyan")
         text.append("退出")
         return text
@@ -301,27 +297,28 @@ def build_node_scores(
     service_name: str,
     proxy_group_name: str,
     storage: NodeHistoryStorage,
+    disabled_node_names: set[str] | None = None,
 ) -> list[NodeScore]:
     scored_nodes = []
+    disabled_node_names = disabled_node_names or set()
     for node in nodes:
+        if node in disabled_node_names:
+            continue
         record = storage.get_node_service_record(node, service_name, proxy_group_name)
-        disabled = storage.is_node_disabled(node, service_name, proxy_group_name)
-        scored_nodes.append(_node_score_from_record(node, record, disabled=disabled))
+        scored_nodes.append(_node_score_from_record(node, record))
 
     return sorted(
         scored_nodes,
-        key=lambda node: (node.disabled, -node.score, node.name != current_node, node.name),
+        key=lambda node: (-node.score, node.name != current_node, node.name),
     )
 
 
 def _node_score_from_record(
     node: str,
     record: Optional[ServiceRecord],
-    *,
-    disabled: bool = False,
 ) -> NodeScore:
     if record is None:
-        return NodeScore(name=node, disabled=disabled)
+        return NodeScore(name=node)
 
     return NodeScore(
         name=node,
@@ -329,7 +326,6 @@ def _node_score_from_record(
         status=record.status,
         total_checks=record.total_checks,
         successful_checks=record.successful_checks,
-        disabled=disabled,
     )
 
 
@@ -361,13 +357,10 @@ def _node_name_style(node: NodeScore, *, selected: bool = False, current: bool =
 
 def _node_display_name(node: NodeScore, *, current: bool = False) -> str:
     marker = "* " if current else "  "
-    suffix = " [禁用]" if node.disabled else ""
-    return f"{marker}{node.name}{suffix}"
+    return f"{marker}{node.name}"
 
 
 def _node_status_color(node: NodeScore) -> str:
-    if node.disabled:
-        return "bright_black"
     if node.status == "available":
         return "green"
     if node.status == "failed":

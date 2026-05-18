@@ -53,23 +53,5 @@ class NodeHistoryStorageTest(unittest.TestCase):
         self.assertEqual(youtube.status, "available")
         self.assertEqual(youtube_music.status, "failed")
 
-    def test_node_disabled_state_is_separated_by_service_and_group(self) -> None:
-        storage = self.make_storage()
-
-        storage.set_node_disabled("node-a", "youtube_music", "Youtube", True)
-
-        self.assertTrue(storage.is_node_disabled("node-a", "youtube_music", "Youtube"))
-        self.assertFalse(storage.is_node_disabled("node-a", "youtube_music", "Youtube-Music"))
-        self.assertFalse(storage.is_node_disabled("node-a", "gemini", "Youtube"))
-
-    def test_toggle_node_disabled_returns_new_state(self) -> None:
-        storage = self.make_storage()
-
-        self.assertTrue(storage.toggle_node_disabled("node-a", "youtube_music", "Youtube"))
-        self.assertTrue(storage.is_node_disabled("node-a", "youtube_music", "Youtube"))
-        self.assertFalse(storage.toggle_node_disabled("node-a", "youtube_music", "Youtube"))
-        self.assertFalse(storage.is_node_disabled("node-a", "youtube_music", "Youtube"))
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,6 @@ from clash_auto_switch.tui.monitor import (
     MonitorTui,
     NodeScore,
     _node_display_name,
-    _node_status_color,
     _visible_node_window,
     build_node_scores,
 )
@@ -36,10 +35,6 @@ class FakeStorage:
         is_available: bool,
     ) -> None:
         pass
-
-    def is_node_disabled(self, _node: str, _service_name: str, _proxy_group: str) -> bool:
-        return False
-
 
 class FakeScoreStorage:
     def __init__(self) -> None:
@@ -74,10 +69,6 @@ class FakeScoreStorage:
     ) -> ServiceRecord | None:
         return self.records.get(node)
 
-    def is_node_disabled(self, node: str, _service_name: str, _proxy_group: str) -> bool:
-        return node == "node-c"
-
-
 class FakeLowScoreStorage:
     def get_records_by_node(self, _node: str, _proxy_group: str) -> list:
         return []
@@ -100,15 +91,6 @@ class FakeLowScoreStorage:
                 successful_checks=0,
             )
         return None
-
-    def is_node_disabled(self, _node: str, _service_name: str, _proxy_group: str) -> bool:
-        return False
-
-
-class FakeDisabledNodeStorage(FakeStorage):
-    def is_node_disabled(self, node: str, _service_name: str, _proxy_group: str) -> bool:
-        return node == "node-b"
-
 
 class FakeClashClient:
     def __init__(self, *, verified_now: str) -> None:
@@ -191,7 +173,8 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
             client,
             "Group",
             "youtube_music",
-            FakeDisabledNodeStorage(),
+            FakeStorage(),
+            disabled_node_names={"node-b"},
         )
 
         self.assertNotIn("node-b", [candidate.name for candidate in candidates])
@@ -241,12 +224,11 @@ class TuiNodeScoreTest(unittest.TestCase):
             service_name="youtube_music",
             proxy_group_name="Youtube-Music",
             storage=FakeScoreStorage(),
+            disabled_node_names={"node-c"},
         )
 
-        self.assertEqual([node.name for node in scores], ["node-b", "node-a", "node-c"])
+        self.assertEqual([node.name for node in scores], ["node-b", "node-a"])
         self.assertEqual(scores[0].score, 0.9)
-        self.assertTrue(scores[2].disabled)
-        self.assertEqual(scores[2].status, "unknown")
 
     def test_tui_selection_moves_with_vim_keys(self) -> None:
         tasks = [
@@ -321,13 +303,6 @@ class TuiNodeScoreTest(unittest.TestCase):
         ]
 
         self.assertEqual(labels, ["  node-a", "* node-b", "  node-c"])
-
-    def test_disabled_node_display_is_gray_and_labeled(self) -> None:
-        node = NodeScore("node-a", status="available", disabled=True)
-
-        self.assertEqual(_node_display_name(node), "  node-a [禁用]")
-        self.assertEqual(_node_status_color(node), "bright_black")
-
 
 if __name__ == "__main__":
     unittest.main()

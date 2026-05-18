@@ -29,12 +29,26 @@ class ProxyServicePair:
 
 
 @dataclass
+class DisabledNode:
+    """User-disabled node for one proxy group and service."""
+
+    proxy_group_name: str
+    service_name: str
+    node_name: str
+
+
+@dataclass
 class AppConfig:
     """Complete application configuration."""
 
     clash: ClashConfig
     monitoring: MonitoringConfig
     tasks: List[ProxyServicePair]
+    disabled_nodes: Optional[List[DisabledNode]] = None
+
+    def __post_init__(self) -> None:
+        if self.disabled_nodes is None:
+            self.disabled_nodes = []
 
 
 @dataclass

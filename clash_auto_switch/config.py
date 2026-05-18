@@ -1,7 +1,7 @@
 from typing import Optional
 
-from clash_auto_switch.defs import AppConfig, ClashConfig, MonitoringConfig, ProxyServicePair
-from clash_auto_switch.project import load_config
+from clash_auto_switch.defs import AppConfig, ClashConfig, DisabledNode, MonitoringConfig, ProxyServicePair
+from clash_auto_switch.project import load_config, save_config
 
 
 def load_app_config() -> Optional[AppConfig]:
@@ -17,6 +17,7 @@ def parse_config_data(data: dict) -> AppConfig:
     clash_data = data.get("clash", {})
     monitoring_data = data.get("monitoring", {})
     tasks_data = data.get("tasks", [])
+    disabled_nodes_data = data.get("disabled_nodes", [])
 
     clash_config = ClashConfig(
         controller=clash_data.get("controller", "127.0.0.1:9097"),
@@ -38,9 +39,82 @@ def parse_config_data(data: dict) -> AppConfig:
         )
         for task_data in tasks_data
     ]
+    disabled_nodes = [
+        DisabledNode(
+            proxy_group_name=item["proxy_group_name"],
+            service_name=item["service_name"],
+            node_name=item["node_name"],
+        )
+        for item in disabled_nodes_data
+        if isinstance(item, dict)
+        and item.get("proxy_group_name")
+        and item.get("service_name")
+        and item.get("node_name")
+    ]
 
     return AppConfig(
         clash=clash_config,
         monitoring=monitoring_config,
         tasks=tasks,
+        disabled_nodes=disabled_nodes,
     )
+
+
+def dump_config_data(config: AppConfig) -> dict:
+    """Serialize AppConfig into the config file format."""
+    return {
+        "clash": {
+            "controller": config.clash.controller,
+            "secret": config.clash.secret,
+            "http_proxy": config.clash.http_proxy,
+        },
+        "monitoring": {
+            "interval_sec": config.monitoring.interval_sec,
+            "max_rotations": config.monitoring.max_rotations,
+            "once": config.monitoring.once,
+        },
+        "tasks": [
+            {
+                "proxy_group_name": task.proxy_group_name,
+                "service_name": task.service_name,
+                "enabled": task.enabled,
+            }
+            for task in config.tasks
+        ],
+        "disabled_nodes": [
+            {
+                "proxy_group_name": node.proxy_group_name,
+                "service_name": node.service_name,
+                "node_name": node.node_name,
+            }
+            for node in config.disabled_nodes
+        ],
+    }
+
+
+def save_app_config(config: AppConfig) -> bool:
+    """Persist AppConfig to the standard config file."""
+    return save_config(dump_config_data(config))
+
+
+def disabled_node_names_for_task(config: AppConfig, task: ProxyServicePair) -> set[str]:
+    """Return disabled node names for a task."""
+    return {
+        node.node_name
+        for node in config.disabled_nodes
+        if node.proxy_group_name == task.proxy_group_name
+        and node.service_name == task.service_name
+    }
+
+
+def disable_node_for_task(config: AppConfig, task: ProxyServicePair, node_name: str) -> bool:
+    """Disable one node for a task and persist the config."""
+    if node_name not in disabled_node_names_for_task(config, task):
+        config.disabled_nodes.append(
+            DisabledNode(
+                proxy_group_name=task.proxy_group_name,
+                service_name=task.service_name,
+                node_name=node_name,
+            )
+        )
+    return save_app_config(config)

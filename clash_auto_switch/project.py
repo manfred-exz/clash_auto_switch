@@ -79,6 +79,7 @@ def get_template_config() -> dict:
             "interval_sec": 30.0,
             "max_rotations": 0,
         },
+        "disabled_nodes": [],
         "tasks": [
             {
                 "proxy_group_name": "🇺🇸美国",

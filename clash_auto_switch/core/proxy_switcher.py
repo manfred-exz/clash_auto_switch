@@ -3,7 +3,7 @@ from typing import Awaitable, Callable, Optional
 
 import httpx
 
-from clash_auto_switch.core.clash_api import ClashClient
+from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair
 from clash_auto_switch.core.service_tester import probe_service
 from clash_auto_switch.core.storage import NodeHistoryStorage
@@ -33,12 +33,15 @@ class SwitchAttemptResult:
 
 
 async def list_alive_proxy_candidates(
-    client: ClashClient,
+    client: ClashProxyState,
     proxy_group_name: str,
     service_name: str,
     storage: NodeHistoryStorage,
+    *,
+    disabled_node_names: Optional[set[str]] = None,
 ) -> list[ProxyCandidate]:
     """Build switch candidates from every alive node in a proxy group."""
+    disabled_node_names = disabled_node_names or set()
     group_info = await client.get_proxy(proxy_group_name)
     candidates = group_info.get("all") or []
     if not isinstance(candidates, list) or not candidates:
@@ -60,7 +63,7 @@ async def list_alive_proxy_candidates(
         if not is_alive:
             continue
 
-        if storage.is_node_disabled(candidate, service_name, proxy_group_name):
+        if candidate in disabled_node_names:
             continue
 
         record = storage.get_node_service_record(candidate, service_name, proxy_group_name)
@@ -94,11 +97,12 @@ async def list_alive_proxy_candidates(
 
 
 async def switch_to_next_ranked_proxy(
-    client: ClashClient,
+    client: ClashProxyState,
     proxy_group_name: str,
     service_name: str,
     storage: NodeHistoryStorage,
     *,
+    disabled_node_names: Optional[set[str]] = None,
     event_handler: Optional[EventFunc] = None,
 ) -> str:
     """Switch to the highest-ranked alive proxy that is not currently selected."""
@@ -107,6 +111,7 @@ async def switch_to_next_ranked_proxy(
         proxy_group_name,
         service_name,
         storage,
+        disabled_node_names=disabled_node_names,
     )
     if not candidates:
         raise RuntimeError(f"No alive proxies found in group '{proxy_group_name}'.")
@@ -127,7 +132,7 @@ async def switch_to_next_ranked_proxy(
 
 
 async def switch_proxy_group_and_verify(
-    client: ClashClient,
+    client: ClashProxyState,
     proxy_group_name: str,
     proxy_name: str,
 ) -> None:
@@ -143,7 +148,7 @@ async def switch_proxy_group_and_verify(
 
 
 async def probe_current_node_and_switch_if_unavailable(
-    clash: ClashClient,
+    clash: ClashProxyState,
     task: ProxyServicePair,
     clash_config: ClashConfig,
     storage: NodeHistoryStorage,
@@ -151,6 +156,7 @@ async def probe_current_node_and_switch_if_unavailable(
     probe_func: ProbeFunc = probe_service,
     switch_allowed: bool = True,
     switch_block_reason: Optional[str] = None,
+    disabled_node_names: Optional[set[str]] = None,
     event_handler: Optional[EventFunc] = None,
 ) -> tuple[bool, bool]:
     """Check one service once and switch proxy if unavailable."""
@@ -199,6 +205,7 @@ async def probe_current_node_and_switch_if_unavailable(
             proxy_group_name,
             service_name,
             storage,
+            disabled_node_names=disabled_node_names,
             event_handler=event_handler,
         )
         if event_handler is not None:
@@ -211,7 +218,7 @@ async def probe_current_node_and_switch_if_unavailable(
 
 
 async def switch_until_service_available(
-    clash: ClashClient,
+    clash: ClashProxyState,
     task: ProxyServicePair,
     clash_config: ClashConfig,
     storage: NodeHistoryStorage,
@@ -219,6 +226,7 @@ async def switch_until_service_available(
     probe_func: ProbeFunc = probe_service,
     switch_allowed: bool = True,
     switch_block_reason: Optional[str] = None,
+    disabled_node_names: Optional[set[str]] = None,
     event_handler: Optional[EventFunc] = None,
     after_switch: Optional[Callable[[str], Awaitable[None]]] = None,
     max_attempts: Optional[int] = None,
@@ -238,6 +246,7 @@ async def switch_until_service_available(
             probe_func=probe_func,
             switch_allowed=switch_allowed,
             switch_block_reason=switch_block_reason,
+            disabled_node_names=disabled_node_names,
             event_handler=event_handler,
         )
         switched_any = switched_any or switched

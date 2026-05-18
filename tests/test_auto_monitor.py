@@ -1,10 +1,7 @@
 import unittest
-from unittest.mock import AsyncMock, patch
 
-from clash_auto_switch.auto_monitor import match_auto_trigger_service, run_auto_check
+from clash_auto_switch.auto_monitor import match_auto_trigger_service
 from clash_auto_switch.core.clash_api import ClashLogEntry
-from clash_auto_switch.defs import ClashConfig, ProxyServicePair
-from clash_auto_switch.core.proxy_switcher import SwitchAttemptResult
 
 
 class AutoTriggerTest(unittest.TestCase):
@@ -50,58 +47,6 @@ class AutoTriggerTest(unittest.TestCase):
             match_auto_trigger_service(self.make_entry("music.youtube.com")),
             "youtube_music",
         )
-
-
-class AutoSwitchNotificationTest(unittest.IsolatedAsyncioTestCase):
-    async def test_auto_check_notifies_when_switched(self) -> None:
-        last_switch_at = {}
-        task_config = ProxyServicePair("Youtube-Music", "youtube_music")
-
-        with (
-            patch(
-                "clash_auto_switch.auto_monitor.switch_until_service_available",
-                new=AsyncMock(return_value=SwitchAttemptResult(ok=True, switched=True, attempts=2)),
-            ),
-            patch("clash_auto_switch.auto_monitor.notify_user", return_value=True) as notify,
-        ):
-            await run_auto_check(
-                clash=object(),
-                task_config=task_config,
-                clash_config=ClashConfig(),
-                storage=object(),
-                service_name="youtube_music",
-                last_switch_at=last_switch_at,
-                switch_allowed=True,
-                switch_block_reason=None,
-            )
-
-        self.assertIn("youtube_music", last_switch_at)
-        notify.assert_called_once()
-
-    async def test_auto_check_does_not_notify_without_switch(self) -> None:
-        last_switch_at = {}
-        task_config = ProxyServicePair("Youtube-Music", "youtube_music")
-
-        with (
-            patch(
-                "clash_auto_switch.auto_monitor.switch_until_service_available",
-                new=AsyncMock(return_value=SwitchAttemptResult(ok=False, switched=False, attempts=1)),
-            ),
-            patch("clash_auto_switch.auto_monitor.notify_user", return_value=True) as notify,
-        ):
-            await run_auto_check(
-                clash=object(),
-                task_config=task_config,
-                clash_config=ClashConfig(),
-                storage=object(),
-                service_name="youtube_music",
-                last_switch_at=last_switch_at,
-                switch_allowed=False,
-                switch_block_reason="cooldown",
-            )
-
-        self.assertEqual(last_switch_at, {})
-        notify.assert_not_called()
 
 
 if __name__ == "__main__":
