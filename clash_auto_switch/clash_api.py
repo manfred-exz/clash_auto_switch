@@ -306,7 +306,7 @@ class ClashClient:
         if level:
             params["level"] = level
 
-        async with self._client.stream("GET", "/logs", params=params) as response:
+        async with self._client.stream("GET", "/logs", params=params, timeout=None) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if not line:
@@ -362,6 +362,25 @@ class ClashClient:
             f"/proxies/{selector_name}", json={"name": proxy_name}
         )
         # Some implementations may return 204 (expected) or 200 with body
+        if response.status_code not in (200, 204):
+            response.raise_for_status()
+
+    # ---------- Connections ----------
+    async def get_connections(self) -> Dict[str, Any]:
+        """Get active connections.
+
+        GET /connections
+        """
+        response = await self._client.get("/connections")
+        response.raise_for_status()
+        return response.json()
+
+    async def close_connection(self, connection_id: str) -> None:
+        """Close one active connection by id.
+
+        DELETE /connections/:id
+        """
+        response = await self._client.delete(f"/connections/{connection_id}")
         if response.status_code not in (200, 204):
             response.raise_for_status()
 
@@ -449,7 +468,7 @@ if __name__ == "__main__":
 
     async def main():
         async with ClashClient.from_external_controller("127.0.0.1:9097", secret='set-your-secret') as client:
-            proxies = await client.get_proxy('Youtube-Music')
+            proxies = await client.get_proxy('Youtube')
             with open('proxy.json', 'w', encoding='utf-8') as f:
                 json.dump(proxies, f, indent=2, ensure_ascii=False)
 

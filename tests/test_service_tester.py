@@ -117,6 +117,17 @@ class ServiceTesterTest(unittest.TestCase):
             ),
             "No",
         )
+        self.assertEqual(
+            parse_youtube_music_player_response(
+                {
+                    "playabilityStatus": {
+                        "status": "LOGIN_REQUIRED",
+                        "reason": "Sign in to confirm you are not a bot",
+                    },
+                }
+            ),
+            "Yes",
+        )
 
 
 if __name__ == "__main__":

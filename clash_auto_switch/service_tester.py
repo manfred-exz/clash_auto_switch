@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import re
 import argparse
 from dataclasses import dataclass
@@ -320,13 +321,30 @@ def parse_youtube_music_player_response(data: Dict) -> str:
     if status == "OK" and data.get("streamingData"):
         return "Yes"
 
-    if status in {"UNPLAYABLE", "LOGIN_REQUIRED", "AGE_CHECK_REQUIRED"}:
+    if status in {"LOGIN_REQUIRED", "AGE_CHECK_REQUIRED"}:
+        return "Yes"
+
+    if status == "UNPLAYABLE":
         return "No"
 
     if status:
         return f"Failed (Player {status})"
 
     return "Failed (Unexpected Player Response)"
+
+
+def youtube_music_player_debug(data: Dict) -> Dict[str, Optional[str]]:
+    playability = data.get("playabilityStatus") or {}
+    response_context = data.get("responseContext") or {}
+    return {
+        "status": playability.get("status"),
+        "reason": playability.get("reason"),
+        "playable_in_embed": str(playability.get("playableInEmbed"))
+        if "playableInEmbed" in playability
+        else None,
+        "has_streaming_data": str(bool(data.get("streamingData"))),
+        "visitor_data": response_context.get("visitorData"),
+    }
 
 
 # 测试 YouTube Music
@@ -388,6 +406,67 @@ async def check_youtube_music(proxy: Optional[str] = None) -> TestResultItem:
             region = None
 
     return TestResultItem("Youtube Music", status, region=region)
+
+
+async def debug_youtube_music(proxy: Optional[str] = None) -> None:
+    url = "https://music.youtube.com/"
+    custom_headers = {
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+    }
+    async with create_http_client(proxy, custom_headers) as client:
+        response = await client.get(url, follow_redirects=True)
+        print(f"page_url: {response.url}")
+        print(f"page_status: {response.status_code}")
+        print(f"page_len: {len(response.text)}")
+        status, region = parse_youtube_music_page(response.text)
+        print(f"page_parse: {status}")
+        print(f"page_region: {region}")
+
+        api_key, client_version, gl = extract_youtube_music_api_config(response.text)
+        print(f"api_key: {'yes' if api_key else 'no'}")
+        print(f"client_version: {client_version}")
+        print(f"gl: {gl}")
+        if not api_key or not client_version:
+            print("player: skipped (missing api config)")
+            return
+
+        player_response = await client.post(
+            f"https://music.youtube.com/youtubei/v1/player?key={api_key}",
+            json={
+                "context": {
+                    "client": {
+                        "clientName": "WEB_REMIX",
+                        "clientVersion": client_version,
+                        "hl": "zh-CN",
+                        "gl": gl or "US",
+                    }
+                },
+                "videoId": "kJQP7kiw5Fk",
+                "playbackContext": {
+                    "contentPlaybackContext": {
+                        "html5Preference": "HTML5_PREF_WANTS",
+                    }
+                },
+            },
+            headers={
+                "Origin": "https://music.youtube.com",
+                "Referer": "https://music.youtube.com/",
+            },
+        )
+        print(f"player_status_code: {player_response.status_code}")
+        try:
+            player_data = player_response.json()
+        except ValueError:
+            print(f"player_text: {player_response.text[:500]}")
+            return
+        print(f"player_parse: {parse_youtube_music_player_response(player_data)}")
+        for key, value in youtube_music_player_debug(player_data).items():
+            print(f"player_{key}: {value}")
 
 
 # 测试动画疯(Bahamut Anime)
@@ -733,7 +812,22 @@ async def probe_service_multi(
     return True, status
 
 
-async def main(proxy: Optional[str]):
+async def main(proxy: Optional[str], service: Optional[str] = None, debug: bool = False):
+    if debug:
+        if service != "youtube_music":
+            raise SystemExit("--debug currently supports --service youtube_music only")
+        await debug_youtube_music(proxy)
+        return
+
+    if service:
+        norm = normalize_service_name(service)
+        checker = SERVICE_CHECKERS.get(norm)
+        if checker is None:
+            raise SystemExit(f"unknown service: {service}")
+        result = await checker(proxy)
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        return
+
     # 每个检测函数现在都使用独立的客户端
     tasks = [
         check_chatgpt(proxy),
@@ -753,13 +847,13 @@ async def main(proxy: Optional[str]):
     for result in results:
         final_results.append(result.to_dict())
 
-    # 打印结果
-    import json
     print(json.dumps(final_results, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run unlock tests for various streaming services.')
     parser.add_argument('--proxy', type=str, default='http://127.0.0.1:7890', help='Proxy to use for the requests, e.g., http://127.0.0.1:7890')
+    parser.add_argument('--service', type=str, default=None, help='Only run one service checker')
+    parser.add_argument('--debug', action='store_true', help='Print debug details for the selected service')
     args = parser.parse_args()
 
-    asyncio.run(main(args.proxy))
+    asyncio.run(main(args.proxy, args.service, args.debug))

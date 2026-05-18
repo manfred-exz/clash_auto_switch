@@ -1,6 +1,33 @@
 import unittest
 
-from clash_auto_switch.clash_api import ClashLogEntry
+from clash_auto_switch.clash_api import ClashClient, ClashLogEntry
+
+
+class FakeStreamResponse:
+    def raise_for_status(self) -> None:
+        pass
+
+    async def aiter_lines(self):
+        yield '{"type":"info","payload":"[TCP] 127.0.0.1:1(app.exe) --> example.com:443 match Match using DIRECT"}'
+
+
+class FakeStreamContext:
+    async def __aenter__(self) -> FakeStreamResponse:
+        return FakeStreamResponse()
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        pass
+
+
+class FakeHttpClient:
+    def __init__(self) -> None:
+        self.timeout = object()
+
+    def stream(self, method: str, url: str, **kwargs):
+        self.method = method
+        self.url = url
+        self.kwargs = kwargs
+        return FakeStreamContext()
 
 
 class ClashLogEntryTest(unittest.TestCase):
@@ -59,6 +86,19 @@ class ClashLogEntryTest(unittest.TestCase):
         self.assertEqual(entry.rule.rule_value, None)
         self.assertEqual(entry.outbound.policy, "其他")
         self.assertEqual(entry.outbound.selected, "yushe |  狮城 02")
+
+
+class ClashClientLogStreamTest(unittest.IsolatedAsyncioTestCase):
+    async def test_iter_logs_disables_read_timeout_for_long_lived_stream(self) -> None:
+        client = ClashClient.__new__(ClashClient)
+        fake_http_client = FakeHttpClient()
+        client._client = fake_http_client
+
+        entry = await anext(client.iter_logs(level="info"))
+
+        self.assertEqual(entry.destination.host, "example.com")
+        self.assertIsNone(fake_http_client.kwargs["timeout"])
+        self.assertEqual(fake_http_client.kwargs["params"], {"level": "info"})
 
 
 if __name__ == "__main__":

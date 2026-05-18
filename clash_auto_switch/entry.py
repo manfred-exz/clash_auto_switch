@@ -8,6 +8,7 @@ import json
 
 from clash_auto_switch.auto_monitor import run_auto_tasks
 from clash_auto_switch.config import load_app_config
+from clash_auto_switch.debug_tools import debug_switch_candidates
 from clash_auto_switch.monitor import run_multiple_tasks
 from clash_auto_switch.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
@@ -53,6 +54,13 @@ def parse_args() -> argparse.Namespace:
         nargs=2,
         metavar=("PROXY_GROUP", "SERVICE"),
         help="显示指定代理组和服务的详细节点统计信息并退出",
+    )
+    parser.add_argument(
+        "--debug-switch",
+        type=str,
+        nargs=2,
+        metavar=("PROXY_GROUP", "SERVICE"),
+        help="调试指定代理组和服务的切换候选节点排序，不执行切换",
     )
     parser.add_argument(
         "--clear-stats",
@@ -216,6 +224,11 @@ def main() -> None:
     config = load_app_config()
     if not config:
         print("错误: 配置文件为空或格式错误")
+        return
+
+    if args.debug_switch:
+        proxy_group_name, service_name = args.debug_switch
+        asyncio.run(debug_switch_candidates(config.clash, proxy_group_name, service_name))
         return
 
     # Override monitor setting if specified
