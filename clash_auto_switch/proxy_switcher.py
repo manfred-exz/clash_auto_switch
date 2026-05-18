@@ -74,6 +74,13 @@ async def select_next_proxy_in_group(
         selected_score = sorted_records[0][1].reliability_score
 
     await client.select_proxy(proxy_group_name, recommended)
+    verified_group_info = await client.get_proxy(proxy_group_name)
+    verified_current = verified_group_info.get("now")
+    if verified_current != recommended:
+        raise RuntimeError(
+            f"Proxy group '{proxy_group_name}' switch verification failed: "
+            f"expected '{recommended}', got '{verified_current}'"
+        )
 
     print(f"    └── 推荐节点: {recommended:<20} | 可靠性评分: {selected_score:.3f}")
 
