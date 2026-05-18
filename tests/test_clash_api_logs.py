@@ -1,6 +1,6 @@
 import unittest
 
-from clash_auto_switch.clash_api import ClashClient, ClashLogEntry
+from clash_auto_switch.core.clash_api import ClashClient, ClashLogEntry
 
 
 class FakeStreamResponse:

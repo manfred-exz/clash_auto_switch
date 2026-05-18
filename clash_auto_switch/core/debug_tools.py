@@ -1,7 +1,7 @@
-from clash_auto_switch.clash_api import ClashClient
+from clash_auto_switch.core.clash_api import ClashClient
 from clash_auto_switch.defs import ClashConfig
-from clash_auto_switch.proxy_switcher import list_alive_proxy_candidates
-from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.core.proxy_switcher import list_alive_proxy_candidates
+from clash_auto_switch.core.storage import NodeHistoryStorage
 
 
 async def debug_switch_candidates(

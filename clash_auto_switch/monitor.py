@@ -1,17 +1,21 @@
 import asyncio
 from contextlib import suppress
 
-from clash_auto_switch.clash_api import ClashClient
-from clash_auto_switch.connections import close_task_service_connections_best_effort
+from clash_auto_switch.core.clash_api import ClashClient
+from clash_auto_switch.core.clash_state import ClashProxyState
+from clash_auto_switch.core.connections import close_task_service_connections_best_effort
 from clash_auto_switch.defs import AppConfig, ClashConfig, MonitoringConfig, ProxyServicePair
-from clash_auto_switch.proxy_switcher import (
+from clash_auto_switch.core.proxy_switcher import (
     probe_current_node_and_switch_if_unavailable,
     switch_proxy_group_and_verify,
     switch_until_service_available,
 )
-from clash_auto_switch.service_tester import probe_service, probe_service_multi
-from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.core.service_tester import probe_service, probe_service_multi
+from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.tui import MonitorTui
+
+
+TUI_REFRESH_INTERVAL_SEC = 5.0
 
 
 async def run_periodic_monitor_task(
@@ -22,7 +26,8 @@ async def run_periodic_monitor_task(
     tui: MonitorTui,
 ) -> None:
     """Run a single periodic monitoring task."""
-    async with ClashClient.from_external_controller(clash_config.controller, secret=clash_config.secret) as clash:
+    async with ClashClient.from_external_controller(clash_config.controller, secret=clash_config.secret) as client:
+        clash = ClashProxyState(client)
         rotations = 0
         is_new_proxy = True
         tui.event(task.service_name, f"开始监控 | 代理组: {task.proxy_group_name}")
@@ -94,15 +99,51 @@ async def run_periodic_monitor_tasks(config: AppConfig) -> None:
 
     with MonitorTui(enabled_tasks) as tui:
         tui.event("system", f"启动 {len(enabled_tasks)} 个监控任务")
-        async def switch_node(task: ProxyServicePair, node_name: str) -> None:
+
+        async def refresh_loop() -> None:
             async with ClashClient.from_external_controller(
                 config.clash.controller,
                 secret=config.clash.secret,
-            ) as clash:
+            ) as client:
+                clash = ClashProxyState(client)
+                while True:
+                    for task_config in enabled_tasks:
+                        await tui.refresh_service(clash, task_config, storage)
+                    await asyncio.sleep(TUI_REFRESH_INTERVAL_SEC)
+
+        async def switch_node(task: ProxyServicePair, node_name: str) -> None:
+            if storage.is_node_disabled(node_name, task.service_name, task.proxy_group_name):
+                tui.event(task.service_name, f"节点已禁用，拒绝切换 | {node_name}")
+                return
+            async with ClashClient.from_external_controller(
+                config.clash.controller,
+                secret=config.clash.secret,
+            ) as client:
+                clash = ClashProxyState(client)
                 await switch_proxy_group_and_verify(clash, task.proxy_group_name, node_name)
                 tui.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
                 await close_task_service_connections_best_effort(clash, task, tui.event)
+                await probe_current_node_and_switch_if_unavailable(
+                    clash,
+                    task,
+                    config.clash,
+                    storage,
+                    probe_func=probe_service,
+                    switch_allowed=False,
+                    switch_block_reason="手动切换后仅刷新状态",
+                    event_handler=tui.event,
+                )
                 await tui.refresh_service(clash, task, storage)
+
+        async def toggle_node_disabled(task: ProxyServicePair, node_name: str) -> None:
+            disabled = storage.toggle_node_disabled(node_name, task.service_name, task.proxy_group_name)
+            state = "禁用" if disabled else "启用"
+            tui.event(task.service_name, f"{state}节点 | {node_name}")
+            async with ClashClient.from_external_controller(
+                config.clash.controller,
+                secret=config.clash.secret,
+            ) as client:
+                await tui.refresh_service(ClashProxyState(client), task, storage)
 
         tasks = [
             asyncio.create_task(
@@ -111,16 +152,21 @@ async def run_periodic_monitor_tasks(config: AppConfig) -> None:
             )
             for task_config in enabled_tasks
         ]
+        refresh_task = None
         interaction_task = None
         if not config.monitoring.once:
-            interaction_task = asyncio.create_task(tui.run_interaction(switch_node), name="tui_interaction")
+            refresh_task = asyncio.create_task(refresh_loop(), name="tui_refresh")
+            interaction_task = asyncio.create_task(
+                tui.run_interaction(switch_node, toggle_node_disabled),
+                name="tui_interaction",
+            )
 
         try:
             if interaction_task is None:
                 await asyncio.gather(*tasks)
             else:
                 done, pending = await asyncio.wait(
-                    [*tasks, interaction_task],
+                    [*tasks, refresh_task, interaction_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for completed in done:
@@ -132,12 +178,12 @@ async def run_periodic_monitor_tasks(config: AppConfig) -> None:
                         await pending_task
         except Exception as e:
             tui.event("system", f"监控任务异常: {e}")
-            for task in [*tasks, interaction_task]:
+            for task in [*tasks, refresh_task, interaction_task]:
                 if task is None:
                     continue
                 if not task.done():
                     task.cancel()
-            for task in [*tasks, interaction_task]:
+            for task in [*tasks, refresh_task, interaction_task]:
                 if task is None:
                     continue
                 with suppress(asyncio.CancelledError):

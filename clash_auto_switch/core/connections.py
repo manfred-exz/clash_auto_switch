@@ -3,7 +3,7 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-from clash_auto_switch.clash_api import ClashClient
+from clash_auto_switch.core.clash_api import ClashClient
 from clash_auto_switch.defs import ProxyServicePair
 
 

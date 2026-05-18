@@ -8,9 +8,9 @@ import json
 
 from clash_auto_switch.auto_monitor import run_auto_monitor_tasks
 from clash_auto_switch.config import load_app_config
-from clash_auto_switch.debug_tools import debug_switch_candidates
+from clash_auto_switch.core.debug_tools import debug_switch_candidates
 from clash_auto_switch.monitor import run_periodic_monitor_tasks
-from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
     get_config_file_path,
     get_data_file_path,

@@ -1,12 +1,19 @@
 import unittest
 
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair, ServiceRecord
-from clash_auto_switch.proxy_switcher import (
+from clash_auto_switch.core.proxy_switcher import (
     list_alive_proxy_candidates,
     switch_to_next_ranked_proxy,
     switch_until_service_available,
 )
-from clash_auto_switch.tui import MonitorTui, NodeScore, _visible_node_window, build_node_scores
+from clash_auto_switch.tui.monitor import (
+    MonitorTui,
+    NodeScore,
+    _node_display_name,
+    _node_status_color,
+    _visible_node_window,
+    build_node_scores,
+)
 
 
 class FakeStorage:
@@ -29,6 +36,9 @@ class FakeStorage:
         is_available: bool,
     ) -> None:
         pass
+
+    def is_node_disabled(self, _node: str, _service_name: str, _proxy_group: str) -> bool:
+        return False
 
 
 class FakeScoreStorage:
@@ -64,6 +74,9 @@ class FakeScoreStorage:
     ) -> ServiceRecord | None:
         return self.records.get(node)
 
+    def is_node_disabled(self, node: str, _service_name: str, _proxy_group: str) -> bool:
+        return node == "node-c"
+
 
 class FakeLowScoreStorage:
     def get_records_by_node(self, _node: str, _proxy_group: str) -> list:
@@ -87,6 +100,14 @@ class FakeLowScoreStorage:
                 successful_checks=0,
             )
         return None
+
+    def is_node_disabled(self, _node: str, _service_name: str, _proxy_group: str) -> bool:
+        return False
+
+
+class FakeDisabledNodeStorage(FakeStorage):
+    def is_node_disabled(self, node: str, _service_name: str, _proxy_group: str) -> bool:
+        return node == "node-b"
 
 
 class FakeClashClient:
@@ -163,6 +184,18 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected, "node-c")
         self.assertEqual(client.selected, ("Group", "node-c"))
 
+    async def test_switch_candidates_skip_disabled_nodes(self) -> None:
+        client = FakeClashClient(verified_now="node-c")
+
+        candidates = await list_alive_proxy_candidates(
+            client,
+            "Group",
+            "youtube_music",
+            FakeDisabledNodeStorage(),
+        )
+
+        self.assertNotIn("node-b", [candidate.name for candidate in candidates])
+
     async def test_switch_until_service_available_rechecks_after_switch(self) -> None:
         client = StatefulFakeClashClient()
         probe_results = iter([(False, "No"), (True, "Yes")])
@@ -212,7 +245,7 @@ class TuiNodeScoreTest(unittest.TestCase):
 
         self.assertEqual([node.name for node in scores], ["node-b", "node-a", "node-c"])
         self.assertEqual(scores[0].score, 0.9)
-        self.assertTrue(scores[1].is_current)
+        self.assertTrue(scores[2].disabled)
         self.assertEqual(scores[2].status, "unknown")
 
     def test_tui_selection_moves_with_vim_keys(self) -> None:
@@ -255,6 +288,7 @@ class TuiNodeScoreTest(unittest.TestCase):
         task, node = tui.selected_node()
         self.assertEqual((task.service_name, node), ("youtube_music", "node-b"))
         self.assertEqual(tui.handle_key("enter"), "switch")
+        self.assertEqual(tui.handle_key("d"), "toggle_disabled")
         self.assertEqual(tui.handle_key("q"), "quit")
 
     def test_visible_node_window_keeps_selection_visible(self) -> None:
@@ -272,6 +306,27 @@ class TuiNodeScoreTest(unittest.TestCase):
             [index for index, _node in _visible_node_window(nodes, selected_index=9, max_rows=4)],
             [6, 7, 8, 9],
         )
+
+    def test_current_node_marker_is_derived_from_service_current_node(self) -> None:
+        nodes = [
+            NodeScore("node-a", status="available"),
+            NodeScore("node-b", status="available"),
+            NodeScore("node-c", status="available"),
+        ]
+        current_node = "node-b"
+
+        labels = [
+            _node_display_name(node, current=node.name == current_node)
+            for node in nodes
+        ]
+
+        self.assertEqual(labels, ["  node-a", "* node-b", "  node-c"])
+
+    def test_disabled_node_display_is_gray_and_labeled(self) -> None:
+        node = NodeScore("node-a", status="available", disabled=True)
+
+        self.assertEqual(_node_display_name(node), "  node-a [禁用]")
+        self.assertEqual(_node_status_color(node), "bright_black")
 
 
 if __name__ == "__main__":

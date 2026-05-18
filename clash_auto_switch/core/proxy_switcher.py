@@ -3,10 +3,10 @@ from typing import Awaitable, Callable, Optional
 
 import httpx
 
-from clash_auto_switch.clash_api import ClashClient
+from clash_auto_switch.core.clash_api import ClashClient
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair
-from clash_auto_switch.service_tester import probe_service
-from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.core.service_tester import probe_service
+from clash_auto_switch.core.storage import NodeHistoryStorage
 
 
 ProbeFunc = Callable[[str, Optional[str]], Awaitable[tuple[bool, str]]]
@@ -58,6 +58,9 @@ async def list_alive_proxy_candidates(
             is_alive = True
 
         if not is_alive:
+            continue
+
+        if storage.is_node_disabled(candidate, service_name, proxy_group_name):
             continue
 
         record = storage.get_node_service_record(candidate, service_name, proxy_group_name)

@@ -5,18 +5,24 @@ from typing import Optional
 
 import httpx
 
-from clash_auto_switch.clash_api import ClashClient, ClashLogEntry
-from clash_auto_switch.connections import close_task_service_connections_best_effort
+from clash_auto_switch.core.clash_api import ClashClient, ClashLogEntry
+from clash_auto_switch.core.clash_state import ClashProxyState
+from clash_auto_switch.core.connections import close_task_service_connections_best_effort
 from clash_auto_switch.defs import AppConfig, ClashConfig, ProxyServicePair
-from clash_auto_switch.notifier import notify_user
-from clash_auto_switch.proxy_switcher import switch_proxy_group_and_verify, switch_until_service_available
-from clash_auto_switch.service_tester import normalize_service_name
-from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.core.notifier import notify_user
+from clash_auto_switch.core.proxy_switcher import (
+    probe_current_node_and_switch_if_unavailable,
+    switch_proxy_group_and_verify,
+    switch_until_service_available,
+)
+from clash_auto_switch.core.service_tester import normalize_service_name, probe_service
+from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.tui import MonitorTui
 
 
 AUTO_SWITCH_COOLDOWN_SEC = 10.0
 LOG_RECONNECT_DELAY_SEC = 3.0
+TUI_REFRESH_INTERVAL_SEC = 5.0
 
 SERVICE_LOG_HOST_PATTERNS = {
     "bilibili_mainland": (
@@ -123,15 +129,41 @@ async def run_auto_monitor_tasks(config: AppConfig) -> None:
 
     with MonitorTui(watched_tasks) as tui:
         tui.event("system", f"启动 auto 模式 | 监听 {len(watched_tasks)} 个服务")
-        async with ClashClient.from_external_controller(config.clash.controller, secret=config.clash.secret) as clash:
+        async with ClashClient.from_external_controller(config.clash.controller, secret=config.clash.secret) as client:
+            clash = ClashProxyState(client)
             for task in watched_tasks:
                 await tui.refresh_service(clash, task, storage)
 
             async def switch_node(task: ProxyServicePair, node_name: str) -> None:
+                if storage.is_node_disabled(node_name, task.service_name, task.proxy_group_name):
+                    tui.event(task.service_name, f"节点已禁用，拒绝切换 | {node_name}")
+                    return
                 await switch_proxy_group_and_verify(clash, task.proxy_group_name, node_name)
                 tui.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
                 await close_task_service_connections_best_effort(clash, task, tui.event)
+                await probe_current_node_and_switch_if_unavailable(
+                    clash,
+                    task,
+                    config.clash,
+                    storage,
+                    probe_func=probe_service,
+                    switch_allowed=False,
+                    switch_block_reason="手动切换后仅刷新状态",
+                    event_handler=tui.event,
+                )
                 await tui.refresh_service(clash, task, storage)
+
+            async def toggle_node_disabled(task: ProxyServicePair, node_name: str) -> None:
+                disabled = storage.toggle_node_disabled(node_name, task.service_name, task.proxy_group_name)
+                state = "禁用" if disabled else "启用"
+                tui.event(task.service_name, f"{state}节点 | {node_name}")
+                await tui.refresh_service(clash, task, storage)
+
+            async def refresh_loop() -> None:
+                while True:
+                    for task in watched_tasks:
+                        await tui.refresh_service(clash, task, storage)
+                    await asyncio.sleep(TUI_REFRESH_INTERVAL_SEC)
 
             async def consume_logs() -> None:
                 while True:
@@ -178,11 +210,15 @@ async def run_auto_monitor_tasks(config: AppConfig) -> None:
                     await asyncio.sleep(LOG_RECONNECT_DELAY_SEC)
 
             log_task = asyncio.create_task(consume_logs(), name="auto_log_consumer")
-            interaction_task = asyncio.create_task(tui.run_interaction(switch_node), name="tui_interaction")
+            interaction_task = asyncio.create_task(
+                tui.run_interaction(switch_node, toggle_node_disabled),
+                name="tui_interaction",
+            )
+            refresh_task = asyncio.create_task(refresh_loop(), name="tui_refresh")
             pending: set[asyncio.Task] = set()
             try:
                 done, pending = await asyncio.wait(
-                    [log_task, interaction_task],
+                    [log_task, interaction_task, refresh_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for completed in done:

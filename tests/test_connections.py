@@ -1,6 +1,6 @@
 import unittest
 
-from clash_auto_switch.connections import (
+from clash_auto_switch.core.connections import (
     close_service_connections,
     connection_matches_service,
 )

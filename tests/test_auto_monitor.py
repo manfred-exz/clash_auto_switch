@@ -2,9 +2,9 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from clash_auto_switch.auto_monitor import match_auto_trigger_service, run_auto_check
-from clash_auto_switch.clash_api import ClashLogEntry
+from clash_auto_switch.core.clash_api import ClashLogEntry
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair
-from clash_auto_switch.proxy_switcher import SwitchAttemptResult
+from clash_auto_switch.core.proxy_switcher import SwitchAttemptResult
 
 
 class AutoTriggerTest(unittest.TestCase):

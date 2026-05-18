@@ -1,6 +1,6 @@
 import unittest
 
-from clash_auto_switch.service_tester import (
+from clash_auto_switch.core.service_tester import (
     CLAUDE_BLOCKED_CODES,
     SERVICE_CHECKERS,
     extract_youtube_music_api_config,

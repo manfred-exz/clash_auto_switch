@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.core.storage import NodeHistoryStorage
 
 
 class NodeHistoryStorageTest(unittest.TestCase):
@@ -14,7 +14,7 @@ class NodeHistoryStorageTest(unittest.TestCase):
         if data is not None:
             data_file.write_text(json.dumps(data), encoding="utf-8")
 
-        patcher = patch("clash_auto_switch.storage.get_data_file_path", return_value=data_file)
+        patcher = patch("clash_auto_switch.core.storage.get_data_file_path", return_value=data_file)
         self.addCleanup(patcher.stop)
         patcher.start()
         self.addCleanup(self.temp_dir.cleanup)
@@ -52,6 +52,23 @@ class NodeHistoryStorageTest(unittest.TestCase):
 
         self.assertEqual(youtube.status, "available")
         self.assertEqual(youtube_music.status, "failed")
+
+    def test_node_disabled_state_is_separated_by_service_and_group(self) -> None:
+        storage = self.make_storage()
+
+        storage.set_node_disabled("node-a", "youtube_music", "Youtube", True)
+
+        self.assertTrue(storage.is_node_disabled("node-a", "youtube_music", "Youtube"))
+        self.assertFalse(storage.is_node_disabled("node-a", "youtube_music", "Youtube-Music"))
+        self.assertFalse(storage.is_node_disabled("node-a", "gemini", "Youtube"))
+
+    def test_toggle_node_disabled_returns_new_state(self) -> None:
+        storage = self.make_storage()
+
+        self.assertTrue(storage.toggle_node_disabled("node-a", "youtube_music", "Youtube"))
+        self.assertTrue(storage.is_node_disabled("node-a", "youtube_music", "Youtube"))
+        self.assertFalse(storage.toggle_node_disabled("node-a", "youtube_music", "Youtube"))
+        self.assertFalse(storage.is_node_disabled("node-a", "youtube_music", "Youtube"))
 
 
 if __name__ == "__main__":

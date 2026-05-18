@@ -11,13 +11,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from clash_auto_switch.clash_api import ClashClient
+from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.defs import ProxyServicePair, ServiceRecord
-from clash_auto_switch.keyboard import KeyboardInput
-from clash_auto_switch.storage import NodeHistoryStorage
+from clash_auto_switch.tui.keyboard import KeyboardInput
+from clash_auto_switch.core.storage import NodeHistoryStorage
 
 
 SwitchNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
+ToggleNodeDisabledFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 
 MIN_SERVICE_ROWS = 4
 MIN_EVENT_LINES = 4
@@ -31,7 +32,7 @@ class NodeScore:
     status: str = "unknown"
     total_checks: int = 0
     successful_checks: int = 0
-    is_current: bool = False
+    disabled: bool = False
 
     @property
     def success_rate(self) -> float:
@@ -82,7 +83,7 @@ class MonitorTui:
 
     async def refresh_service(
         self,
-        client: ClashClient,
+        clash: ClashProxyState,
         task: ProxyServicePair,
         storage: NodeHistoryStorage,
     ) -> None:
@@ -91,17 +92,14 @@ class MonitorTui:
             return
 
         try:
-            group_info = await client.get_proxy(task.proxy_group_name)
+            group_state = await clash.get_proxy_group(task.proxy_group_name)
         except Exception as exc:
             self.event(task.service_name, f"读取代理组失败: {exc}", level="warning")
             return
 
-        raw_nodes = group_info.get("all") or []
-        nodes = [node for node in raw_nodes if isinstance(node, str)]
-        current_node = group_info.get("now")
-        service.current_node = current_node if isinstance(current_node, str) else None
+        service.current_node = group_state.now
         service.nodes = build_node_scores(
-            nodes,
+            group_state.nodes,
             current_node=service.current_node,
             service_name=task.service_name,
             proxy_group_name=task.proxy_group_name,
@@ -113,8 +111,11 @@ class MonitorTui:
             service.selected_node_index = 0
         self.refresh()
 
-    async def run_interaction(self, switch_node: SwitchNodeFunc) -> None:
-        self.event("system", "按键: h/l 选择服务 | j/k 选择节点 | Enter 切换 | q 退出")
+    async def run_interaction(
+        self,
+        switch_node: SwitchNodeFunc,
+        toggle_node_disabled: Optional[ToggleNodeDisabledFunc] = None,
+    ) -> None:
         with KeyboardInput() as keyboard:
             while True:
                 key = keyboard.read_key()
@@ -136,6 +137,19 @@ class MonitorTui:
                         await switch_node(task, node_name)
                     except Exception as exc:
                         self.event(task.service_name, f"手动切换失败 | {exc}")
+                if action == "toggle_disabled":
+                    if toggle_node_disabled is None:
+                        self.event("system", "当前模式不支持禁用节点")
+                        continue
+                    selection = self.selected_node()
+                    if selection is None:
+                        self.event("system", "没有可禁用的节点")
+                        continue
+                    task, node_name = selection
+                    try:
+                        await toggle_node_disabled(task, node_name)
+                    except Exception as exc:
+                        self.event(task.service_name, f"禁用节点失败 | {exc}")
 
                 self.refresh()
 
@@ -152,6 +166,8 @@ class MonitorTui:
             self._move_node(-1)
         elif key == "enter":
             return "switch"
+        elif key == "d":
+            return "toggle_disabled"
         return None
 
     def selected_node(self) -> Optional[tuple[ProxyServicePair, str]]:
@@ -207,12 +223,13 @@ class MonitorTui:
                 border_style="yellow",
                 height=event_lines + 2,
             ),
+            self._render_status_bar(),
         )
 
     def _layout_heights(self) -> tuple[int, int]:
         terminal_height = max(self._console.size.height, 12)
         event_lines = min(MAX_EVENT_LINES, max(MIN_EVENT_LINES, terminal_height // 5))
-        service_rows = terminal_height - event_lines - 7
+        service_rows = terminal_height - event_lines - 8
         return max(MIN_SERVICE_ROWS, service_rows), event_lines
 
     def _render_service_table(self, service: ServiceView, *, max_rows: int) -> Table:
@@ -229,12 +246,14 @@ class MonitorTui:
 
         visible_nodes = _visible_node_window(service.nodes, service.selected_node_index, max_rows)
         for index, node in visible_nodes:
+            is_current = node.name == service.current_node
             table.add_row(
                 Text(
-                    node.name,
+                    _node_display_name(node, current=is_current),
                     style=_node_name_style(
                         node,
                         selected=self._is_selected_service(service) and index == service.selected_node_index,
+                        current=is_current,
                     ),
                 ),
                 f"{node.score:.3f}",
@@ -256,6 +275,20 @@ class MonitorTui:
             text.append("\n")
         return text
 
+    def _render_status_bar(self) -> Text:
+        text = Text()
+        text.append(" h/l ", style="bold cyan")
+        text.append("服务  ")
+        text.append(" j/k ", style="bold cyan")
+        text.append("节点  ")
+        text.append(" Enter ", style="bold cyan")
+        text.append("切换  ")
+        text.append(" d ", style="bold cyan")
+        text.append("禁用/启用  ")
+        text.append(" q ", style="bold cyan")
+        text.append("退出")
+        return text
+
     def _is_selected_service(self, service: ServiceView) -> bool:
         selected_service = self._selected_service()
         return selected_service is service
@@ -272,21 +305,23 @@ def build_node_scores(
     scored_nodes = []
     for node in nodes:
         record = storage.get_node_service_record(node, service_name, proxy_group_name)
-        scored_nodes.append(_node_score_from_record(node, record, current_node))
+        disabled = storage.is_node_disabled(node, service_name, proxy_group_name)
+        scored_nodes.append(_node_score_from_record(node, record, disabled=disabled))
 
     return sorted(
         scored_nodes,
-        key=lambda node: (-node.score, not node.is_current, node.name),
+        key=lambda node: (node.disabled, -node.score, node.name != current_node, node.name),
     )
 
 
 def _node_score_from_record(
     node: str,
     record: Optional[ServiceRecord],
-    current_node: Optional[str],
+    *,
+    disabled: bool = False,
 ) -> NodeScore:
     if record is None:
-        return NodeScore(name=node, is_current=node == current_node)
+        return NodeScore(name=node, disabled=disabled)
 
     return NodeScore(
         name=node,
@@ -294,7 +329,7 @@ def _node_score_from_record(
         status=record.status,
         total_checks=record.total_checks,
         successful_checks=record.successful_checks,
-        is_current=node == current_node,
+        disabled=disabled,
     )
 
 
@@ -316,15 +351,23 @@ def _visible_node_window(
     return list(enumerate(nodes[start:end], start=start))
 
 
-def _node_name_style(node: NodeScore, *, selected: bool = False) -> str:
+def _node_name_style(node: NodeScore, *, selected: bool = False, current: bool = False) -> str:
     if selected:
         return f"bold {_node_status_color(node)} on grey35"
-    if node.is_current:
+    if current:
         return f"bold {_node_status_color(node)}"
     return _node_status_color(node)
 
 
+def _node_display_name(node: NodeScore, *, current: bool = False) -> str:
+    marker = "* " if current else "  "
+    suffix = " [禁用]" if node.disabled else ""
+    return f"{marker}{node.name}{suffix}"
+
+
 def _node_status_color(node: NodeScore) -> str:
+    if node.disabled:
+        return "bright_black"
     if node.status == "available":
         return "green"
     if node.status == "failed":

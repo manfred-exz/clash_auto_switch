@@ -8,8 +8,11 @@ from typing import Dict, List, Optional
 import threading
 from dataclasses import fields
 
-from .defs import ServiceRecord
-from .project import get_data_file_path
+from clash_auto_switch.defs import ServiceRecord
+from clash_auto_switch.project import get_data_file_path
+
+
+DISABLED_NODES_KEY = "__disabled_nodes__"
 
 
 class NodeHistoryStorage:
@@ -22,6 +25,7 @@ class NodeHistoryStorage:
 
         # New storage format: {node_name: [ServiceRecord, ...]}
         self._records_by_node: Dict[str, List[ServiceRecord]] = {}
+        self._disabled_nodes: set[str] = set()
         self._load_initial_data()
 
     def get_records_by_node(
@@ -60,9 +64,47 @@ class NodeHistoryStorage:
                 for node_name, records in self._records_by_node.items()
                 if node_name and records
             }
-            if cleaned_records != self._records_by_node:
+            cleaned_disabled_nodes = {key for key in self._disabled_nodes if key.count("#") == 2}
+            if cleaned_records != self._records_by_node or cleaned_disabled_nodes != self._disabled_nodes:
                 self._records_by_node = cleaned_records
+                self._disabled_nodes = cleaned_disabled_nodes
                 self._save_to_file()
+
+    def is_node_disabled(self, node_name: str, service_name: str, proxy_group: str) -> bool:
+        """Return whether a node is manually disabled for a service in a proxy group."""
+        with self._lock:
+            return self._disabled_key(node_name, service_name, proxy_group) in self._disabled_nodes
+
+    def set_node_disabled(
+        self,
+        node_name: str,
+        service_name: str,
+        proxy_group: str,
+        disabled: bool,
+    ) -> None:
+        """Persist manual node disable state for one service and proxy group."""
+        key = self._disabled_key(node_name, service_name, proxy_group)
+        with self._lock:
+            if disabled:
+                self._disabled_nodes.add(key)
+            else:
+                self._disabled_nodes.discard(key)
+            self._save_to_file()
+
+    def toggle_node_disabled(self, node_name: str, service_name: str, proxy_group: str) -> bool:
+        """Toggle manual node disable state. Returns the new disabled state."""
+        key = self._disabled_key(node_name, service_name, proxy_group)
+        with self._lock:
+            disabled = key not in self._disabled_nodes
+            if disabled:
+                self._disabled_nodes.add(key)
+            else:
+                self._disabled_nodes.discard(key)
+            self._save_to_file()
+            return disabled
+
+    def _disabled_key(self, node_name: str, service_name: str, proxy_group: str) -> str:
+        return f"{proxy_group}#{service_name}#{node_name}"
 
     def _record_from_dict(self, record_dict: Dict) -> ServiceRecord:
         """Build a ServiceRecord from current or legacy record dictionaries."""
@@ -90,11 +132,20 @@ class NodeHistoryStorage:
             with open(self._data_file, 'r', encoding='utf-8') as f:
                 file_data = json.load(f)
 
+            disabled_nodes = file_data.get(DISABLED_NODES_KEY)
+            if isinstance(disabled_nodes, list):
+                self._disabled_nodes = {
+                    item for item in disabled_nodes
+                    if isinstance(item, str)
+                }
+
             # Load both the new format:
             #   {node_name: [ServiceRecord, ...]}
             # and the legacy format:
             #   {"proxy_group#service": [{"node_name": "...", ...}, ...]}
             for bucket_name, service_records in file_data.items():
+                if bucket_name == DISABLED_NODES_KEY:
+                    continue
                 if not isinstance(service_records, list):
                     continue
                 for record_dict in service_records:
@@ -120,6 +171,8 @@ class NodeHistoryStorage:
             file_data = {}
             for node_name, service_records in self._records_by_node.items():
                 file_data[node_name] = [record.to_dict() for record in service_records]
+            if self._disabled_nodes:
+                file_data[DISABLED_NODES_KEY] = sorted(self._disabled_nodes)
 
             with open(self._data_file, 'w', encoding='utf-8') as f:
                 json.dump(file_data, f, indent=2, ensure_ascii=False)
@@ -238,6 +291,8 @@ class NodeHistoryStorage:
             export_data = {}
             for node_name, service_records in self._records_by_node.items():
                 export_data[node_name] = [record.to_dict() for record in service_records]
+            if self._disabled_nodes:
+                export_data[DISABLED_NODES_KEY] = sorted(self._disabled_nodes)
 
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
