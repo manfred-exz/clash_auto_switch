@@ -1,9 +1,9 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from clash_auto_switch.auto_monitor import match_auto_trigger_service, run_auto_check
 from clash_auto_switch.clash_api import ClashLogEntry
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair
-from clash_auto_switch.monitor import match_auto_trigger_service, run_auto_check
 
 
 class AutoTriggerTest(unittest.TestCase):
@@ -50,14 +50,15 @@ class AutoTriggerTest(unittest.TestCase):
             "youtube_music",
         )
 
+
 class AutoSwitchNotificationTest(unittest.IsolatedAsyncioTestCase):
     async def test_auto_check_notifies_when_switched(self) -> None:
         last_switch_at = {}
         task_config = ProxyServicePair("Youtube-Music", "youtube_music")
 
         with (
-            patch("clash_auto_switch.monitor.check_and_switch_once", new=AsyncMock(return_value=(False, True))),
-            patch("clash_auto_switch.monitor.notify_user", return_value=True) as notify,
+            patch("clash_auto_switch.auto_monitor.check_and_switch_once", new=AsyncMock(return_value=(False, True))),
+            patch("clash_auto_switch.auto_monitor.notify_user", return_value=True) as notify,
         ):
             await run_auto_check(
                 clash=object(),
@@ -78,8 +79,8 @@ class AutoSwitchNotificationTest(unittest.IsolatedAsyncioTestCase):
         task_config = ProxyServicePair("Youtube-Music", "youtube_music")
 
         with (
-            patch("clash_auto_switch.monitor.check_and_switch_once", new=AsyncMock(return_value=(False, False))),
-            patch("clash_auto_switch.monitor.notify_user", return_value=True) as notify,
+            patch("clash_auto_switch.auto_monitor.check_and_switch_once", new=AsyncMock(return_value=(False, False))),
+            patch("clash_auto_switch.auto_monitor.notify_user", return_value=True) as notify,
         ):
             await run_auto_check(
                 clash=object(),

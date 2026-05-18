@@ -6,11 +6,9 @@ import argparse
 import asyncio
 import json
 
-from clash_auto_switch.monitor import (
-    load_app_config,
-    run_auto_tasks,
-    run_multiple_tasks,
-)
+from clash_auto_switch.auto_monitor import run_auto_tasks
+from clash_auto_switch.config import load_app_config
+from clash_auto_switch.monitor import run_multiple_tasks
 from clash_auto_switch.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
     get_config_file_path,
