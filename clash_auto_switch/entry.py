@@ -6,10 +6,10 @@ import argparse
 import asyncio
 import json
 
-from clash_auto_switch.auto_monitor import run_auto_tasks
+from clash_auto_switch.auto_monitor import run_auto_monitor_tasks
 from clash_auto_switch.config import load_app_config
 from clash_auto_switch.debug_tools import debug_switch_candidates
-from clash_auto_switch.monitor import run_multiple_tasks
+from clash_auto_switch.monitor import run_periodic_monitor_tasks
 from clash_auto_switch.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
     get_config_file_path,
@@ -239,9 +239,9 @@ def main() -> None:
         config_file = get_config_file_path()
         print(f"使用配置文件: {config_file}")
         if args.auto:
-            asyncio.run(run_auto_tasks(config))
+            asyncio.run(run_auto_monitor_tasks(config))
         else:
-            asyncio.run(run_multiple_tasks(config))
+            asyncio.run(run_periodic_monitor_tasks(config))
     except KeyboardInterrupt:
         print("收到 Ctrl-C，退出。")
         raise SystemExit(130)

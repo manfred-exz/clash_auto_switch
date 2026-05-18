@@ -1,6 +1,6 @@
 from clash_auto_switch.clash_api import ClashClient
 from clash_auto_switch.defs import ClashConfig
-from clash_auto_switch.proxy_switcher import build_switch_candidates
+from clash_auto_switch.proxy_switcher import list_alive_proxy_candidates
 from clash_auto_switch.storage import NodeHistoryStorage
 
 
@@ -16,7 +16,7 @@ async def debug_switch_candidates(
     ) as clash:
         group_info = await clash.get_proxy(proxy_group_name)
         current = group_info.get("now")
-        candidates = await build_switch_candidates(
+        candidates = await list_alive_proxy_candidates(
             clash,
             proxy_group_name,
             service_name,

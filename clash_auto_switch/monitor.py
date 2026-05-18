@@ -2,19 +2,19 @@ import asyncio
 from contextlib import suppress
 
 from clash_auto_switch.clash_api import ClashClient
-from clash_auto_switch.connections import close_task_service_connections
+from clash_auto_switch.connections import close_task_service_connections_best_effort
 from clash_auto_switch.defs import AppConfig, ClashConfig, MonitoringConfig, ProxyServicePair
 from clash_auto_switch.proxy_switcher import (
-    check_and_switch_once,
-    check_and_switch_until_available,
-    switch_proxy_in_group,
+    probe_current_node_and_switch_if_unavailable,
+    switch_proxy_group_and_verify,
+    switch_until_service_available,
 )
 from clash_auto_switch.service_tester import probe_service, probe_service_multi
 from clash_auto_switch.storage import NodeHistoryStorage
 from clash_auto_switch.tui import MonitorTui
 
 
-async def run_task(
+async def run_periodic_monitor_task(
     task: ProxyServicePair,
     clash_config: ClashConfig,
     monitoring_config: MonitoringConfig,
@@ -30,17 +30,12 @@ async def run_task(
 
         while True:
             async def after_switch(_node_name: str) -> None:
-                try:
-                    closed_count = await close_task_service_connections(clash, task)
-                except Exception as exc:
-                    closed_count = 0
-                    tui.event(task.service_name, f"关闭连接失败 | {exc}")
-                tui.event(task.service_name, f"关闭连接 | {closed_count} 个")
+                await close_task_service_connections_best_effort(clash, task, tui.event)
                 await tui.refresh_service(clash, task, storage)
 
             probe_func = probe_service_multi if is_new_proxy else probe_service
             if monitoring_config.once:
-                result = await check_and_switch_until_available(
+                result = await switch_until_service_available(
                     clash,
                     task,
                     clash_config,
@@ -52,7 +47,7 @@ async def run_task(
                 ok = result.ok
                 switched = result.switched
             else:
-                ok, switched = await check_and_switch_once(
+                ok, switched = await probe_current_node_and_switch_if_unavailable(
                     clash,
                     task,
                     clash_config,
@@ -87,7 +82,7 @@ async def run_task(
                 await asyncio.sleep(monitoring_config.interval_sec)
 
 
-async def run_multiple_tasks(config: AppConfig) -> None:
+async def run_periodic_monitor_tasks(config: AppConfig) -> None:
     """Run periodic monitoring tasks concurrently."""
     storage = NodeHistoryStorage()
     storage.startup_cleanup()
@@ -104,19 +99,14 @@ async def run_multiple_tasks(config: AppConfig) -> None:
                 config.clash.controller,
                 secret=config.clash.secret,
             ) as clash:
-                await switch_proxy_in_group(clash, task.proxy_group_name, node_name)
+                await switch_proxy_group_and_verify(clash, task.proxy_group_name, node_name)
                 tui.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
-                try:
-                    closed_count = await close_task_service_connections(clash, task)
-                except Exception as exc:
-                    closed_count = 0
-                    tui.event(task.service_name, f"关闭连接失败 | {exc}")
-                tui.event(task.service_name, f"关闭连接 | {closed_count} 个")
+                await close_task_service_connections_best_effort(clash, task, tui.event)
                 await tui.refresh_service(clash, task, storage)
 
         tasks = [
             asyncio.create_task(
-                run_task(task_config, config.clash, config.monitoring, storage, tui),
+                run_periodic_monitor_task(task_config, config.clash, config.monitoring, storage, tui),
                 name=task_config.service_name,
             )
             for task_config in enabled_tasks

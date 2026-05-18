@@ -2,9 +2,9 @@ import unittest
 
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair, ServiceRecord
 from clash_auto_switch.proxy_switcher import (
-    build_switch_candidates,
-    check_and_switch_until_available,
-    select_next_proxy_in_group,
+    list_alive_proxy_candidates,
+    switch_to_next_ranked_proxy,
+    switch_until_service_available,
 )
 from clash_auto_switch.tui import MonitorTui, NodeScore, _visible_node_window, build_node_scores
 
@@ -126,7 +126,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
     async def test_select_next_proxy_verifies_switch(self) -> None:
         client = FakeClashClient(verified_now="node-b")
 
-        selected = await select_next_proxy_in_group(
+        selected = await switch_to_next_ranked_proxy(
             client,
             "Group",
             "youtube_music",
@@ -139,7 +139,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
     async def test_switch_candidates_include_untested_nodes(self) -> None:
         client = FakeClashClient(verified_now="node-c")
 
-        candidates = await build_switch_candidates(
+        candidates = await list_alive_proxy_candidates(
             client,
             "Group",
             "youtube_music",
@@ -153,7 +153,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
     async def test_select_next_prefers_untested_over_failed_low_score_node(self) -> None:
         client = FakeClashClient(verified_now="node-c")
 
-        selected = await select_next_proxy_in_group(
+        selected = await switch_to_next_ranked_proxy(
             client,
             "Group",
             "youtube_music",
@@ -163,7 +163,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected, "node-c")
         self.assertEqual(client.selected, ("Group", "node-c"))
 
-    async def test_check_and_switch_until_available_rechecks_after_switch(self) -> None:
+    async def test_switch_until_service_available_rechecks_after_switch(self) -> None:
         client = StatefulFakeClashClient()
         probe_results = iter([(False, "No"), (True, "Yes")])
         switched_nodes = []
@@ -174,7 +174,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         async def after_switch(node_name: str) -> None:
             switched_nodes.append(node_name)
 
-        result = await check_and_switch_until_available(
+        result = await switch_until_service_available(
             client,
             ProxyServicePair("Group", "youtube_music"),
             ClashConfig(),
@@ -192,7 +192,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         client = FakeClashClient(verified_now="node-a")
 
         with self.assertRaisesRegex(RuntimeError, "switch verification failed"):
-            await select_next_proxy_in_group(
+            await switch_to_next_ranked_proxy(
                 client,
                 "Group",
                 "youtube_music",

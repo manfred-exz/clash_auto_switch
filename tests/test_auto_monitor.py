@@ -59,7 +59,7 @@ class AutoSwitchNotificationTest(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "clash_auto_switch.auto_monitor.check_and_switch_until_available",
+                "clash_auto_switch.auto_monitor.switch_until_service_available",
                 new=AsyncMock(return_value=SwitchAttemptResult(ok=True, switched=True, attempts=2)),
             ),
             patch("clash_auto_switch.auto_monitor.notify_user", return_value=True) as notify,
@@ -84,7 +84,7 @@ class AutoSwitchNotificationTest(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "clash_auto_switch.auto_monitor.check_and_switch_until_available",
+                "clash_auto_switch.auto_monitor.switch_until_service_available",
                 new=AsyncMock(return_value=SwitchAttemptResult(ok=False, switched=False, attempts=1)),
             ),
             patch("clash_auto_switch.auto_monitor.notify_user", return_value=True) as notify,

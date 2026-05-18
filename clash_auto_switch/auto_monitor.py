@@ -6,10 +6,10 @@ from typing import Optional
 import httpx
 
 from clash_auto_switch.clash_api import ClashClient, ClashLogEntry
-from clash_auto_switch.connections import close_task_service_connections
+from clash_auto_switch.connections import close_task_service_connections_best_effort
 from clash_auto_switch.defs import AppConfig, ClashConfig, ProxyServicePair
 from clash_auto_switch.notifier import notify_user
-from clash_auto_switch.proxy_switcher import check_and_switch_until_available, switch_proxy_in_group
+from clash_auto_switch.proxy_switcher import switch_proxy_group_and_verify, switch_until_service_available
 from clash_auto_switch.service_tester import normalize_service_name
 from clash_auto_switch.storage import NodeHistoryStorage
 from clash_auto_switch.tui import MonitorTui
@@ -100,7 +100,7 @@ def match_auto_trigger_service(log_entry: ClashLogEntry) -> Optional[str]:
     return None
 
 
-async def run_auto_tasks(config: AppConfig) -> None:
+async def run_auto_monitor_tasks(config: AppConfig) -> None:
     """Trigger checks from realtime Clash connection logs."""
     storage = NodeHistoryStorage()
     storage.startup_cleanup()
@@ -128,14 +128,9 @@ async def run_auto_tasks(config: AppConfig) -> None:
                 await tui.refresh_service(clash, task, storage)
 
             async def switch_node(task: ProxyServicePair, node_name: str) -> None:
-                await switch_proxy_in_group(clash, task.proxy_group_name, node_name)
+                await switch_proxy_group_and_verify(clash, task.proxy_group_name, node_name)
                 tui.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
-                try:
-                    closed_count = await close_task_service_connections(clash, task)
-                except Exception as exc:
-                    closed_count = 0
-                    tui.event(task.service_name, f"关闭连接失败 | {exc}")
-                tui.event(task.service_name, f"关闭连接 | {closed_count} 个")
+                await close_task_service_connections_best_effort(clash, task, tui.event)
                 await tui.refresh_service(clash, task, storage)
 
             async def consume_logs() -> None:
@@ -214,17 +209,15 @@ async def run_auto_check(
     tui: Optional[MonitorTui] = None,
 ) -> None:
     async def after_switch(_node_name: str) -> None:
-        try:
-            closed_count = await close_task_service_connections(clash, task_config)
-        except Exception as exc:
-            closed_count = 0
-            if tui is not None:
-                tui.event(task_config.service_name, f"关闭连接失败 | {exc}")
+        await close_task_service_connections_best_effort(
+            clash,
+            task_config,
+            tui.event if tui is not None else None,
+        )
         if tui is not None:
-            tui.event(task_config.service_name, f"关闭连接 | {closed_count} 个")
             await tui.refresh_service(clash, task_config, storage)
 
-    result = await check_and_switch_until_available(
+    result = await switch_until_service_available(
         clash,
         task_config,
         clash_config,

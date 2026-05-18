@@ -4,7 +4,7 @@ from typing import Awaitable, Callable, Optional
 import httpx
 
 from clash_auto_switch.clash_api import ClashClient
-from clash_auto_switch.defs import ClashConfig, ProxyServicePair, ServiceRecord
+from clash_auto_switch.defs import ClashConfig, ProxyServicePair
 from clash_auto_switch.service_tester import probe_service
 from clash_auto_switch.storage import NodeHistoryStorage
 
@@ -32,23 +32,7 @@ class SwitchAttemptResult:
     attempts: int
 
 
-def get_service_nodes_by_reliability(
-    candidate_nodes: list[str],
-    service_name: str,
-    proxy_group_name: str,
-    storage: NodeHistoryStorage,
-) -> list[ServiceRecord]:
-    records = [
-        record
-        for node in candidate_nodes
-        for record in storage.get_records_by_node(node, proxy_group_name)
-        if record.service_name == service_name
-    ]
-
-    return sorted(records, key=lambda x: x.reliability_score, reverse=True)
-
-
-async def build_switch_candidates(
+async def list_alive_proxy_candidates(
     client: ClashClient,
     proxy_group_name: str,
     service_name: str,
@@ -106,7 +90,7 @@ async def build_switch_candidates(
     )
 
 
-async def select_next_proxy_in_group(
+async def switch_to_next_ranked_proxy(
     client: ClashClient,
     proxy_group_name: str,
     service_name: str,
@@ -114,8 +98,8 @@ async def select_next_proxy_in_group(
     *,
     event_handler: Optional[EventFunc] = None,
 ) -> str:
-    """Select the next eligible proxy in a group based on reliability scores."""
-    candidates = await build_switch_candidates(
+    """Switch to the highest-ranked alive proxy that is not currently selected."""
+    candidates = await list_alive_proxy_candidates(
         client,
         proxy_group_name,
         service_name,
@@ -124,22 +108,22 @@ async def select_next_proxy_in_group(
     if not candidates:
         raise RuntimeError(f"No alive proxies found in group '{proxy_group_name}'.")
 
-    candidate = next((item for item in candidates if not item.is_current), None)
-    if candidate is None:
+    proxy_to_try = next((item for item in candidates if not item.is_current), None)
+    if proxy_to_try is None:
         raise RuntimeError(f"No suitable proxy found in group '{proxy_group_name}'.")
 
-    recommended = candidate.name
-    selected_score = candidate.score
+    selected_proxy = proxy_to_try.name
+    selected_score = proxy_to_try.score
 
-    await switch_proxy_in_group(client, proxy_group_name, recommended)
+    await switch_proxy_group_and_verify(client, proxy_group_name, selected_proxy)
 
     if event_handler is not None:
-        event_handler(service_name, f"推荐节点: {recommended} | 可靠性评分: {selected_score:.3f}")
+        event_handler(service_name, f"尝试节点: {selected_proxy} | 历史评分: {selected_score:.3f}")
 
-    return recommended
+    return selected_proxy
 
 
-async def switch_proxy_in_group(
+async def switch_proxy_group_and_verify(
     client: ClashClient,
     proxy_group_name: str,
     proxy_name: str,
@@ -155,14 +139,13 @@ async def switch_proxy_in_group(
         )
 
 
-async def check_and_switch_once(
+async def probe_current_node_and_switch_if_unavailable(
     clash: ClashClient,
     task: ProxyServicePair,
     clash_config: ClashConfig,
     storage: NodeHistoryStorage,
     *,
     probe_func: ProbeFunc = probe_service,
-    prefix: str = "",
     switch_allowed: bool = True,
     switch_block_reason: Optional[str] = None,
     event_handler: Optional[EventFunc] = None,
@@ -208,7 +191,7 @@ async def check_and_switch_once(
         return False, False
 
     try:
-        next_proxy = await select_next_proxy_in_group(
+        next_proxy = await switch_to_next_ranked_proxy(
             clash,
             proxy_group_name,
             service_name,
@@ -224,7 +207,7 @@ async def check_and_switch_once(
         return False, False
 
 
-async def check_and_switch_until_available(
+async def switch_until_service_available(
     clash: ClashClient,
     task: ProxyServicePair,
     clash_config: ClashConfig,
@@ -244,7 +227,7 @@ async def check_and_switch_until_available(
 
     while True:
         attempts += 1
-        ok, switched = await check_and_switch_once(
+        ok, switched = await probe_current_node_and_switch_if_unavailable(
             clash,
             task,
             clash_config,
