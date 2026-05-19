@@ -1,103 +1,65 @@
-### 项目简介
+# clash-auto-switch
 
-`clash_auto_switch` 是自动切换Clash节点，以保证目标服务（如 ChatGPT、Netflix、Disney+ 等）可用的小工具。
+`clash-auto-switch` 是一个基于 Clash API 的服务可用性监控和自动切换工具。它会在指定 ProxyGroup 内切换节点，直到目标服务可用。
 
-![](./images/1.jpg)
+适合这些场景：
 
-- 程序会定时检测服务，未解锁/不可用时自动切到下一个可用节点
-- 节点在指定的proxy-group中选择
+- YouTube Music、ChatGPT、Gemini、Claude 等服务在部分节点不可用
+- 节点可连通但服务解锁状态不稳定
+- 希望在终端 TUI 中查看每个服务的节点得分、成功率和当前节点
+- 希望根据 Clash 实时连接日志，只在用户访问相关服务时触发检测和切换
 
-### 使用说明
-- 对于用户指定的一对(`proxy-group`, `service`)，本工具会在`proxy-group`中切换节点，以保证`service`可用
+![TUI](./images/1.jpg)
 
-- 简易用法
-  - 不修改clash的配置/订阅
-  - `proxy-group`:配置为默认代理组(包含你的所有节点)
-  - `service`: 选择要监控的服务
-  - 示例配置
-    ```json
-    "tasks": [
-      {
-          "proxy_group_name": "your default proxy group",
-          "service_name": "chatgpt",
-          "enabled": true
-      }
-    ]
-    ```
+## Quickstart
 
-- 高级用法
-  - 为每一个要监控的`service`，在Clash中单独配置一个`proxy-group`
-  - 示例配置
-    ```json
-    "tasks": [
-      {
-          "proxy_group_name": "openai_proxy_group",
-          "service_name": "chatgpt",
-          "enabled": true
-      },
-      {
-          "proxy_group_name": "gemini_proxy_group",
-          "service_name": "gemini",
-          "enabled": true
-      }
-    ]
-    ```
+### 1. 安装
 
-### 安装
+源码运行推荐使用 `uv`：
 
-```bash
-# 源码安装
+```powershell
+uv sync
+```
+
+也可以安装为命令行工具：
+
+```powershell
 pip install .
 ```
 
-或者直接下载二进制版 [release](https://github.com/manfred-exz/clash_auto_switch/releases/latest)
+安装后命令名是：
 
-### 运行
-
-本工具完全基于配置文件模式，可以同时监控多个代理组和服务：
-
-#### 基本使用流程
-
-1. 生成配置文件模板：
-```bash
-clash_auto_switch --generate-config
+```powershell
+clash-auto-switch --help
 ```
 
-2. 查看配置文件位置和内容：
-```bash
-clash_auto_switch --show-config
+源码目录中也可以直接运行：
+
+```powershell
+uv run python -m clash_auto_switch --help
 ```
 
-3. 根据需要编辑配置文件（见下方配置说明）
+### 2. 生成配置
 
-4. 运行监控：
-```bash
-# 使用配置文件中的设置运行（默认持续监控）
-clash_auto_switch
-
-# 只运行一次，服务可用后退出
-clash_auto_switch --once
+```powershell
+uv run python -m clash_auto_switch --generate-config
 ```
 
-#### 查看统计信息
+查看配置文件路径：
 
-查看所有服务的统计信息概览：
-```bash
-clash_auto_switch --show-stats
+```powershell
+uv run python -m clash_auto_switch --show-config
 ```
 
-![](./images/2.jpg)
+配置文件默认位置：
 
-查看特定代理组和服务的详细节点统计：
-```bash
-clash_auto_switch --show-stats-detail "YourGroup" "netflix"
-```
+- Windows: `%APPDATA%\clash-auto-switch\config.json`
+- macOS: `~/Library/Application Support/clash-auto-switch/config.json`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/clash-auto-switch/config.json`
 
-按 Ctrl-C 可以随时退出。
+### 3. 编辑配置
 
-### 配置文件说明
-
-配置文件自动保存在与节点历史数据相同的位置（跨平台标准数据目录），采用 JSON 格式，包含以下部分：
+最小示例：
 
 ```json
 {
@@ -107,115 +69,237 @@ clash_auto_switch --show-stats-detail "YourGroup" "netflix"
     "http_proxy": "http://127.0.0.1:7890"
   },
   "monitoring": {
-    "interval_sec": 30.0,
-    "max_rotations": 0
+    "interval_sec": 300.0,
+    "max_rotations": 0,
+    "once": false
   },
+  "disabled_nodes": [],
   "tasks": [
     {
-      "proxy_group_name": "🇺🇸美国",
-      "service_name": "chatgpt",
+      "proxy_group_name": "Youtube",
+      "service_name": "youtube_music",
       "enabled": true
     },
     {
-      "proxy_group_name": "🇭🇰香港",
-      "service_name": "netflix",
+      "proxy_group_name": "AI",
+      "service_name": "gemini",
       "enabled": true
     }
   ]
 }
 ```
 
-配置选项说明：
-- `clash.controller`：Clash External Controller 地址
-- `clash.secret`：Clash API 密钥（如未设置则为 null）
-- `clash.http_proxy`：探测请求所走的 HTTP 代理地址
-- `monitoring.interval_sec`：检测间隔（秒）
-- `monitoring.max_rotations`：最大连续切换次数（0 表示无限制）
-- `monitoring.once`：是否只运行一次（false 表示持续监控，true 表示服务可用后退出）
-- `tasks`：监控任务列表
-  - `name`：任务名称（用于日志区分）
-  - `proxy_group_name`：Clash 代理组名称
-  - `service_name`：服务名称
-  - `enabled`：是否启用该任务
+要求：
 
-### 命令行参数
+- `proxy_group_name` 必须是 Clash 中存在的 ProxyGroup 名称。
+- `clash.http_proxy` 是服务探测请求使用的 HTTP 代理，通常是 Clash 的 HTTP 端口。
+- Clash 需要开启 External Controller。
 
-- `--generate-config`：生成配置文件模板到默认位置
-- `--show-config`：显示当前配置文件位置和内容  
-- `--once`：只运行一次，服务可用后退出（覆盖配置文件设置）
-- `--show-stats`：显示所有有数据的服务统计信息概览并退出
-- `--show-stats-detail PROXY_GROUP SERVICE`：显示指定代理组和服务的详细节点统计并退出
-- `--clear-stats`：清除所有节点统计信息
+### 4. 运行
 
-**默认行为**：程序默认进入持续监控模式，会一直运行直到手动停止。
+周期监控模式：
 
-所有其他配置（Clash地址、代理端口、检测间隔等）都通过配置文件管理。
+```powershell
+uv run python -m clash_auto_switch
+```
 
-### 支持的服务与别名
+只运行一次，直到服务切换到可用节点后退出：
 
-以下名称大小写不敏感：
+```powershell
+uv run python -m clash_auto_switch --once
+```
 
-- ChatGPT：`chatgpt`, `openai`
-- Netflix：`netflix`
-- Disney+：`disney+`, `disney`, `disney_plus`
-- Prime Video：`prime_video`, `prime`, `amazon_prime`
-- Gemini：`gemini`
-- YouTube Premium：`youtube_premium`, `youtube`
-- 哔哩哔哩大陆：`bilibili_mainland`, `bilibili_cn`
-- 哔哩哔哩港澳台：`bilibili_hk_mc_tw`, `bilibili_hk`
-- 动画疯：`bahamut_anime`, `bahamut`
+auto 模式，根据 Clash 实时日志触发检测：
 
+```powershell
+uv run python -m clash_auto_switch --auto
+```
 
-### Clash配置参考
-配置proxy-groups
+auto 模式只在检测到对应服务的连接日志时触发检测。例如访问 `music.youtube.com` 时，会触发 `youtube_music` 任务。
 
-- 包括所有节点
+## TUI 快捷键
 
-  ```yaml
-  -   name: "Google-Gemini"
-      type: select
-      include-all-proxies: true
-  ```
+运行后会进入基于 Textual 的动态刷新终端界面：
 
-- 可以手动挑选节点，如
+- `h` / `l`: 切换服务列
+- `j` / `k`: 选择节点
+- `Enter`: 手动切换到选中节点
+- `d`: 禁用选中节点
+- `q`: 退出
 
-  ```yaml
-  -   name: "Google-Gemini"
-      type: select
-      proxies:
-          - node-a
-          - node-b
-          - node-c
-  ```
+节点列表字段：
 
-- 使用proxy-providers
+- 节点: Clash 节点名；`*` 表示当前 ProxyGroup 正在使用的节点
+- 得分: 历史可靠性评分
+- 成功率: 历史检测成功率
 
-  ```yaml
-  -   name: "Google-Gemini"
-      type: select
-      use:
-          - provider-a
-  ```
+右侧连接侧栏会显示当前选中服务的 Clash 活跃连接，数据来自 `GET /connections`，并按服务域名规则过滤。连接字段包括目标 Host、命中规则、代理链路、上传/下载流量和网络类型。
 
-配置路由规则rules
+按 `d` 禁用节点后，该节点会写入配置文件的 `disabled_nodes`，并从该服务的 TUI 列表和自动切换候选中隐藏。
 
-- 使用[geosite](https://github.com/v2fly/domain-list-community)
-  ```yaml
-  - GEOSITE,google-gemini,Google-Gemini
+## 配置说明
+
+### `clash`
+
+```json
+{
+  "controller": "127.0.0.1:9097",
+  "secret": null,
+  "http_proxy": "http://127.0.0.1:7890"
+}
+```
+
+- `controller`: Clash External Controller 地址。
+- `secret`: Clash API 密钥。未设置时使用 `null`。
+- `http_proxy`: 服务检测请求使用的 HTTP 代理地址。
+
+### `monitoring`
+
+```json
+{
+  "interval_sec": 300.0,
+  "max_rotations": 0,
+  "once": false
+}
+```
+
+- `interval_sec`: 周期模式检测间隔，单位秒。
+- `max_rotations`: 最大连续切换次数，`0` 表示不限制。
+- `once`: 是否只运行一次。命令行 `--once` 会覆盖这个值。
+
+### `tasks`
+
+```json
+{
+  "proxy_group_name": "Youtube",
+  "service_name": "youtube_music",
+  "enabled": true
+}
+```
+
+- `proxy_group_name`: Clash ProxyGroup 名称。
+- `service_name`: 服务检测名称。
+- `enabled`: 是否启用。
+
+### `disabled_nodes`
+
+```json
+[
+  {
+    "proxy_group_name": "Youtube",
+    "service_name": "youtube_music",
+    "node_name": "node-a"
+  }
+]
+```
+
+禁用粒度是 `(proxy_group_name, service_name, node_name)`。同一个节点可以只在某个服务下禁用。
+
+## 支持的服务
+
+当前默认启用检测：
+
+- `chatgpt`
+- `claude`
+- `gemini`
+- `youtube_premium`
+- `youtube_music`
+- `bahamut_anime`
+- `netflix`
+- `disney_plus`
+- `prime_video`
+
+常用别名：
+
+- ChatGPT: `chatgpt`, `openai`
+- Claude: `claude`, `anthropic`
+- Gemini: `gemini`
+- YouTube Premium: `youtube_premium`, `youtube`
+- YouTube Music: `youtube_music`, `youtube-music`, `youtubemusic`, `ytmusic`
+- Disney+: `disney_plus`, `disney+`, `disney`
+- Prime Video: `prime_video`, `prime`, `amazon_prime`
+- Bahamut Anime: `bahamut_anime`, `bahamut`
+
+哔哩哔哩相关检测代码保留在代码中，但默认未注册启用。
+
+## 调试命令
+
+查看当前配置：
+
+```powershell
+uv run python -m clash_auto_switch --show-config
+```
+
+查看历史统计：
+
+```powershell
+uv run python -m clash_auto_switch --show-stats
+```
+
+查看指定服务的节点统计：
+
+```powershell
+uv run python -m clash_auto_switch --show-stats-detail "Youtube" "youtube_music"
+```
+
+调试指定 ProxyGroup 的切换候选排序，不执行切换：
+
+```powershell
+uv run python -m clash_auto_switch --debug-switch "Youtube" "youtube_music"
+```
+
+单独调试 YouTube Music 检测：
+
+```powershell
+uv run python -m clash_auto_switch.core.service_tester --service youtube_music --debug
+```
+
+清除节点历史统计：
+
+```powershell
+uv run python -m clash_auto_switch --clear-stats
+```
+
+## Clash 配置参考
+
+ProxyGroup 示例：
+
+```yaml
+proxy-groups:
+  - name: "Youtube"
+    type: select
+    include-all-proxies: true
+
+  - name: "AI"
+    type: select
+    proxies:
+      - node-a
+      - node-b
+      - node-c
+```
+
+规则示例：
+
+```yaml
+rules:
   - GEOSITE,youtube,Youtube
-  ```
+  - DOMAIN-SUFFIX,music.youtube.com,Youtube
+  - DOMAIN-SUFFIX,gemini.google.com,AI
+  - MATCH,Proxy
+```
 
-- 手动配置请参考 https://wiki.metacubex.one/config/rules/
+更多规则格式参考 MetaCubeX 文档：
 
+https://wiki.metacubex.one/config/rules/
 
-### 常见问题
+## 开发文档
 
-- 提示无法连接或 401：
-  - 确认 `--controller` 地址正确且 Clash 已运行；
-  - 若 Clash 设置了 `secret`，必须通过 `--secret` 传入；
-  - 某些实现需要 `http://` 协议前缀，尝试 `--controller http://127.0.0.1:9097`。
+开发和架构说明见：
 
+[docs/development.md](./docs/development.md)
 
-### 其他
+## 说明
 
-服务检测代码基于[clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev). 
+服务检测实现参考了 clash-verge-rev 的解锁检测思路：
+
+https://github.com/clash-verge-rev/clash-verge-rev

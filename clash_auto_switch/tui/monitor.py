@@ -1,28 +1,24 @@
-import asyncio
+from __future__ import annotations
+
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
-from rich.columns import Columns
-from rich.console import Console, Group
-from rich.live import Live
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import DataTable, Footer, RichLog, Static
 
 from clash_auto_switch.core.clash_state import ProxyGroupState
-from clash_auto_switch.defs import ProxyServicePair, ServiceRecord
-from clash_auto_switch.tui.keyboard import KeyboardInput
+from clash_auto_switch.core.connections import connection_matches_service
 from clash_auto_switch.core.storage import NodeHistoryStorage
+from clash_auto_switch.defs import ProxyServicePair, ServiceRecord
 
 
 SwitchNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 DisableNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 
-MIN_SERVICE_ROWS = 4
-MIN_EVENT_LINES = 4
-MAX_EVENT_LINES = 10
+MAX_CONNECTION_ROWS = 12
 
 
 @dataclass
@@ -41,44 +37,142 @@ class NodeScore:
 
 
 @dataclass
+class ConnectionRow:
+    host: str
+    rule: str
+    chain: str
+    traffic: str
+    network: str
+    total_bytes: int = 0
+
+
+@dataclass
 class ServiceView:
     task: ProxyServicePair
     current_node: Optional[str] = None
     last_status: str = "等待检测"
     nodes: list[NodeScore] = field(default_factory=list)
     selected_node_index: int = 0
+    connections: list[ConnectionRow] = field(default_factory=list)
+    connection_status: str = "等待读取连接"
 
 
-class MonitorTui:
-    """Dynamic terminal UI for monitor mode."""
+class MonitorTui(App[None]):
+    """Textual terminal UI for monitor mode."""
+
+    CSS = """
+    Screen {
+        layout: vertical;
+    }
+
+    #main {
+        height: 1fr;
+    }
+
+    #services {
+        width: 1fr;
+        height: 1fr;
+    }
+
+    .service-table {
+        width: 1fr;
+        height: 1fr;
+        border: round cyan;
+    }
+
+    .service-table.selected {
+        border: round magenta;
+    }
+
+    #connection-pane {
+        width: 48;
+        min-width: 36;
+        height: 1fr;
+        border: round yellow;
+    }
+
+    #connection-title {
+        height: 1;
+        padding: 0 1;
+    }
+
+    #connections {
+        height: 1fr;
+    }
+
+    #events {
+        height: 7;
+        border: round green;
+    }
+    """
+
+    BINDINGS = [
+        ("h", "previous_service", "服务-"),
+        ("l", "next_service", "服务+"),
+        ("j", "next_node", "节点+"),
+        ("k", "previous_node", "节点-"),
+        ("enter", "switch_node", "切换"),
+        ("d", "disable_node", "禁用"),
+        ("q", "quit", "退出"),
+    ]
 
     def __init__(self, tasks: list[ProxyServicePair], *, max_events: int = 50) -> None:
+        super().__init__()
         self._service_order = [task.service_name for task in tasks]
-        self._services = {
-            task.service_name: ServiceView(task=task)
-            for task in tasks
-        }
+        self._services = {task.service_name: ServiceView(task=task) for task in tasks}
         self._events: deque[str] = deque(maxlen=max_events)
-        self._live: Optional[Live] = None
-        self._selected_service_index: Optional[int] = None
-        self._console = Console()
+        self._selected_service_index: Optional[int] = 0 if tasks else None
+        self._switch_node: Optional[SwitchNodeFunc] = None
+        self._disable_node: Optional[DisableNodeFunc] = None
+        self._service_table_ids = {
+            task.service_name: f"service-{index}"
+            for index, task in enumerate(tasks)
+        }
+        self._ui_ready = False
 
-    def __enter__(self) -> "MonitorTui":
-        self._live = Live(self.render(), refresh_per_second=4, screen=True, console=self._console)
-        self._live.__enter__()
-        return self
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="main"):
+            with Horizontal(id="services"):
+                for task in (service.task for service in self._services.values()):
+                    yield DataTable(id=self._service_table_ids[task.service_name], classes="service-table")
+            with Vertical(id="connection-pane"):
+                yield Static("连接: -", id="connection-title")
+                yield DataTable(id="connections")
+        yield RichLog(id="events", wrap=True, highlight=False, markup=False)
+        yield Footer()
 
-    def __exit__(self, exc_type, exc, traceback) -> None:
-        if self._live is not None:
-            self._live.__exit__(exc_type, exc, traceback)
-            self._live = None
+    def on_mount(self) -> None:
+        self._ui_ready = True
+        for service in self._services.values():
+            table = self._service_table(service)
+            table.add_columns("节点", "得分", "成功率")
+            table.cursor_type = "row"
+            table.zebra_stripes = True
+
+        connections = self.query_one("#connections", DataTable)
+        connections.add_columns("Host", "Rule", "Chain", "Traffic", "Net")
+        connections.cursor_type = "row"
+        connections.zebra_stripes = True
+
+        self._render_all()
+
+    def configure_callbacks(
+        self,
+        switch_node: SwitchNodeFunc,
+        disable_node: Optional[DisableNodeFunc] = None,
+    ) -> None:
+        self._switch_node = switch_node
+        self._disable_node = disable_node
 
     def event(self, service_name: str, message: str, *, level: str = "info") -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self._events.append(f"[{timestamp}] [{service_name}] {message}")
+        line = f"[{timestamp}] [{service_name}] {message}"
+        self._events.append(line)
         if service_name in self._services:
             self._services[service_name].last_status = message
-        self.refresh()
+            self._render_service(self._services[service_name])
+        if self._ui_ready:
+            self.query_one("#events", RichLog).write(line)
 
     def update_service(
         self,
@@ -105,49 +199,42 @@ class MonitorTui:
             service.selected_node_index = min(service.selected_node_index, len(service.nodes) - 1)
         else:
             service.selected_node_index = 0
-        self.refresh()
+        self._render_service(service)
+        if self._is_selected_service(service):
+            self._render_connections()
 
-    async def run_interaction(
+    def update_connections(
         self,
-        switch_node: SwitchNodeFunc,
-        disable_node: Optional[DisableNodeFunc] = None,
+        task: ProxyServicePair,
+        connections_payload: dict[str, Any] | None = None,
+        *,
+        error: str | None = None,
     ) -> None:
-        with KeyboardInput() as keyboard:
-            while True:
-                key = keyboard.read_key()
-                if key is None:
-                    await asyncio.sleep(0.05)
-                    continue
+        service = self._services.get(task.service_name)
+        if service is None:
+            return
 
-                action = self.handle_key(key)
-                if action == "quit":
-                    self.event("system", "退出")
-                    return
-                if action == "switch":
-                    selection = self.selected_node()
-                    if selection is None:
-                        self.event("system", "没有可切换的节点")
-                        continue
-                    task, node_name = selection
-                    try:
-                        await switch_node(task, node_name)
-                    except Exception as exc:
-                        self.event(task.service_name, f"手动切换失败 | {exc}")
-                if action == "toggle_disabled":
-                    if disable_node is None:
-                        self.event("system", "当前模式不支持禁用节点")
-                        continue
-                    selection = self.selected_node()
-                    if selection is None:
-                        self.event("system", "没有可禁用的节点")
-                        continue
-                    task, node_name = selection
-                    try:
-                        await disable_node(task, node_name)
-                    except Exception as exc:
-                        self.event(task.service_name, f"禁用节点失败 | {exc}")
+        if error is not None:
+            service.connection_status = f"读取连接失败: {error}"
+            service.connections = []
+        else:
+            service.connections = build_connection_rows(connections_payload or {}, task.service_name)
+            count = len(service.connections)
+            service.connection_status = f"{count} 个相关连接" if count else "暂无相关连接"
 
-                self.refresh()
+        if self._is_selected_service(service):
+            self._render_connections()
+
+    def selected_task(self) -> Optional[ProxyServicePair]:
+        service = self._selected_service()
+        return service.task if service is not None else None
+
+    def selected_node(self) -> Optional[tuple[ProxyServicePair, str]]:
+        service = self._selected_service()
+        if service is None or not service.nodes:
+            return None
+        node = service.nodes[service.selected_node_index]
+        return service.task, node.name
 
     def handle_key(self, key: str) -> Optional[str]:
         if key == "q":
@@ -166,20 +253,60 @@ class MonitorTui:
             return "toggle_disabled"
         return None
 
-    def selected_node(self) -> Optional[tuple[ProxyServicePair, str]]:
-        service = self._selected_service()
-        if service is None or not service.nodes:
-            return None
-        node = service.nodes[service.selected_node_index]
-        return service.task, node.name
+    def action_previous_service(self) -> None:
+        self._move_service(-1)
+
+    def action_next_service(self) -> None:
+        self._move_service(1)
+
+    def action_next_node(self) -> None:
+        self._move_node(1)
+
+    def action_previous_node(self) -> None:
+        self._move_node(-1)
+
+    async def action_switch_node(self) -> None:
+        selection = self.selected_node()
+        if selection is None:
+            self.event("system", "没有可切换的节点")
+            return
+        if self._switch_node is None:
+            self.event("system", "当前模式不支持手动切换")
+            return
+
+        task, node_name = selection
+        try:
+            await self._switch_node(task, node_name)
+        except Exception as exc:
+            self.event(task.service_name, f"手动切换失败 | {exc}")
+
+    async def action_disable_node(self) -> None:
+        selection = self.selected_node()
+        if selection is None:
+            self.event("system", "没有可禁用的节点")
+            return
+        if self._disable_node is None:
+            self.event("system", "当前模式不支持禁用节点")
+            return
+
+        task, node_name = selection
+        try:
+            await self._disable_node(task, node_name)
+        except Exception as exc:
+            self.event(task.service_name, f"禁用节点失败 | {exc}")
+
+    def action_quit(self) -> None:
+        self.event("system", "退出")
+        self.exit()
 
     def _move_service(self, delta: int) -> None:
         if not self._service_order:
             return
         if self._selected_service_index is None:
             self._selected_service_index = 0 if delta >= 0 else len(self._service_order) - 1
-            return
-        self._selected_service_index = (self._selected_service_index + delta) % len(self._service_order)
+        else:
+            self._selected_service_index = (self._selected_service_index + delta) % len(self._service_order)
+        self._render_all()
 
     def _move_node(self, delta: int) -> None:
         if self._selected_service_index is None:
@@ -188,6 +315,7 @@ class MonitorTui:
         if service is None or not service.nodes:
             return
         service.selected_node_index = (service.selected_node_index + delta) % len(service.nodes)
+        self._render_service(service)
 
     def _selected_service(self) -> Optional[ServiceView]:
         if not self._service_order or self._selected_service_index is None:
@@ -195,99 +323,69 @@ class MonitorTui:
         service_name = self._service_order[self._selected_service_index]
         return self._services.get(service_name)
 
-    def refresh(self) -> None:
-        if self._live is not None:
-            self._live.update(self.render())
+    def _render_all(self) -> None:
+        if not self._ui_ready:
+            return
+        for service in self._services.values():
+            self._render_service(service)
+        self._render_connections()
+        events = self.query_one("#events", RichLog)
+        events.clear()
+        for line in self._events:
+            events.write(line)
 
-    def render(self) -> Group:
-        service_rows, event_lines = self._layout_heights()
-        panels = [
-            Panel(
-                self._render_service_table(service, max_rows=service_rows),
-                title=f"{service.task.service_name}  |  {service.task.proxy_group_name}",
-                border_style="magenta" if self._is_selected_service(service) else "cyan",
-                height=service_rows + 4,
-            )
-            for service in self._services.values()
-        ]
-        service_columns = Columns(panels, equal=True, expand=True)
-        return Group(
-            service_columns,
-            Panel(
-                self._render_event_log(event_lines),
-                title="关键事件",
-                border_style="yellow",
-                height=event_lines + 2,
-            ),
-            self._render_status_bar(),
-        )
+    def _render_service(self, service: ServiceView) -> None:
+        if not self._ui_ready:
+            return
 
-    def _layout_heights(self) -> tuple[int, int]:
-        terminal_height = max(self._console.size.height, 12)
-        event_lines = min(MAX_EVENT_LINES, max(MIN_EVENT_LINES, terminal_height // 5))
-        service_rows = terminal_height - event_lines - 8
-        return max(MIN_SERVICE_ROWS, service_rows), event_lines
-
-    def _render_service_table(self, service: ServiceView, *, max_rows: int) -> Table:
-        table = Table(expand=True, show_lines=False)
+        table = self._service_table(service)
+        table.clear()
+        table.border_title = f"{service.task.service_name} | {service.task.proxy_group_name}"
         current_node = service.current_node or "-"
-        table.caption = f"当前节点: {current_node} | 最近状态: {service.last_status}"
-        table.add_column("节点")
-        table.add_column("得分", width=8, justify="right")
-        table.add_column("成功率", width=8, justify="right")
+        table.border_subtitle = f"当前: {current_node} | {service.last_status}"
+        table.set_class(self._is_selected_service(service), "selected")
 
         if not service.nodes:
             table.add_row("等待读取 ProxyGroup 节点", "-", "-")
-            return table
+            return
 
-        visible_nodes = _visible_node_window(service.nodes, service.selected_node_index, max_rows)
-        for index, node in visible_nodes:
-            is_current = node.name == service.current_node
+        for index, node in enumerate(service.nodes):
+            current_marker = "* " if node.name == service.current_node else "  "
             table.add_row(
-                Text(
-                    _node_display_name(node, current=is_current),
-                    style=_node_name_style(
-                        node,
-                        selected=self._is_selected_service(service) and index == service.selected_node_index,
-                        current=is_current,
-                    ),
-                ),
+                f"{current_marker}{node.name}",
                 f"{node.score:.3f}",
                 f"{node.success_rate:.0%}" if node.total_checks else "-",
+                key=str(index),
             )
-        hidden_count = len(service.nodes) - len(visible_nodes)
-        if hidden_count > 0:
-            table.caption = f"{table.caption} | 隐藏 {hidden_count} 个节点"
-        return table
+        table.move_cursor(row=service.selected_node_index, column=0, animate=False)
 
-    def _render_event_log(self, max_lines: int) -> Text:
-        text = Text()
-        if not self._events:
-            text.append("暂无事件")
-            return text
+    def _render_connections(self) -> None:
+        if not self._ui_ready:
+            return
 
-        for line in list(self._events)[-max_lines:]:
-            text.append(line)
-            text.append("\n")
-        return text
+        selected = self._selected_service()
+        title = self.query_one("#connection-title", Static)
+        table = self.query_one("#connections", DataTable)
+        table.clear()
 
-    def _render_status_bar(self) -> Text:
-        text = Text()
-        text.append(" h/l ", style="bold cyan")
-        text.append("服务  ")
-        text.append(" j/k ", style="bold cyan")
-        text.append("节点  ")
-        text.append(" Enter ", style="bold cyan")
-        text.append("切换  ")
-        text.append(" d ", style="bold cyan")
-        text.append("禁用  ")
-        text.append(" q ", style="bold cyan")
-        text.append("退出")
-        return text
+        if selected is None:
+            title.update("连接: -")
+            table.add_row("-", "-", "-", "-", "-")
+            return
+
+        title.update(f"连接: {selected.task.service_name} | {selected.connection_status}")
+        if not selected.connections:
+            table.add_row(selected.connection_status, "-", "-", "-", "-")
+            return
+
+        for row in selected.connections:
+            table.add_row(row.host, row.rule, row.chain, row.traffic, row.network)
+
+    def _service_table(self, service: ServiceView) -> DataTable:
+        return self.query_one(f"#{self._service_table_ids[service.task.service_name]}", DataTable)
 
     def _is_selected_service(self, service: ServiceView) -> bool:
-        selected_service = self._selected_service()
-        return selected_service is service
+        return self._selected_service() is service
 
 
 def build_node_scores(
@@ -311,6 +409,25 @@ def build_node_scores(
         scored_nodes,
         key=lambda node: (-node.score, node.name != current_node, node.name),
     )
+
+
+def build_connection_rows(
+    connections_payload: dict[str, Any],
+    service_name: str,
+    *,
+    limit: int = MAX_CONNECTION_ROWS,
+) -> list[ConnectionRow]:
+    connections = connections_payload.get("connections") or []
+    if not isinstance(connections, list):
+        return []
+
+    rows = [
+        _connection_row(connection)
+        for connection in connections
+        if isinstance(connection, dict) and connection_matches_service(connection, service_name)
+    ]
+    rows.sort(key=lambda row: (-row.total_bytes, row.host))
+    return rows[:limit]
 
 
 def _node_score_from_record(
@@ -347,22 +464,96 @@ def _visible_node_window(
     return list(enumerate(nodes[start:end], start=start))
 
 
-def _node_name_style(node: NodeScore, *, selected: bool = False, current: bool = False) -> str:
-    if selected:
-        return f"bold {_node_status_color(node)} on grey35"
-    if current:
-        return f"bold {_node_status_color(node)}"
-    return _node_status_color(node)
-
-
 def _node_display_name(node: NodeScore, *, current: bool = False) -> str:
     marker = "* " if current else "  "
     return f"{marker}{node.name}"
 
 
-def _node_status_color(node: NodeScore) -> str:
-    if node.status == "available":
-        return "green"
-    if node.status == "failed":
-        return "red"
-    return "white"
+def _connection_row(connection: dict[str, Any]) -> ConnectionRow:
+    upload = _int_value(connection.get("upload"))
+    download = _int_value(connection.get("download"))
+    total = upload + download
+    return ConnectionRow(
+        host=_connection_host(connection),
+        rule=_connection_rule(connection),
+        chain=_connection_chain(connection),
+        traffic=f"U {_format_bytes(upload)} / D {_format_bytes(download)}",
+        network=_connection_network(connection),
+        total_bytes=total,
+    )
+
+
+def _connection_host(connection: dict[str, Any]) -> str:
+    metadata = connection.get("metadata")
+    if isinstance(metadata, dict):
+        host = metadata.get("host")
+        if isinstance(host, str) and host:
+            return _truncate(host, 32)
+        destination_ip = metadata.get("destinationIP")
+        destination_port = metadata.get("destinationPort")
+        if destination_ip:
+            return _truncate(f"{destination_ip}:{destination_port or '-'}", 32)
+
+    host = connection.get("host")
+    if isinstance(host, str) and host:
+        return _truncate(host, 32)
+    return "-"
+
+
+def _connection_rule(connection: dict[str, Any]) -> str:
+    rule = connection.get("rule")
+    payload = connection.get("rulePayload")
+    parts = [str(part) for part in (rule, payload) if part]
+    return _truncate(" ".join(parts), 32) if parts else "-"
+
+
+def _connection_chain(connection: dict[str, Any]) -> str:
+    chains = connection.get("chains")
+    if isinstance(chains, list):
+        values = [str(chain) for chain in chains if chain]
+        if values:
+            return _truncate(" > ".join(values), 28)
+    chain = connection.get("chain")
+    if isinstance(chain, str) and chain:
+        return _truncate(chain, 28)
+    return "-"
+
+
+def _connection_network(connection: dict[str, Any]) -> str:
+    metadata = connection.get("metadata")
+    if isinstance(metadata, dict):
+        network = metadata.get("network") or metadata.get("type")
+        if network:
+            return str(network)
+    network = connection.get("network")
+    return str(network) if network else "-"
+
+
+def _format_bytes(value: int) -> str:
+    units = ("B", "KiB", "MiB", "GiB")
+    amount = float(value)
+    for unit in units:
+        if amount < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(amount)}B"
+            return f"{amount:.1f}{unit}"
+        amount /= 1024.0
+    return f"{value}B"
+
+
+def _int_value(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    if isinstance(value, float):
+        return max(int(value), 0)
+    return 0
+
+
+def _truncate(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    if max_length <= 3:
+        return value[:max_length]
+    return f"{value[: max_length - 3]}..."

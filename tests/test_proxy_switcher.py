@@ -260,7 +260,8 @@ class TuiNodeScoreTest(unittest.TestCase):
             storage=FakeScoreStorage(),
         )
 
-        self.assertIsNone(tui.selected_node())
+        task, node = tui.selected_node()
+        self.assertEqual((task.service_name, node), ("gemini", "node-b"))
 
         tui.handle_key("j")
         task, node = tui.selected_node()

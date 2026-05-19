@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx[http2]>=0.28.1",
     "plyer>=2.1.0",
-    "rich>=14.0.0",
+    "textual>=8.2.6",
 ]
 authors = [
     {name = "Manfred Zhu", email = "manfred.exz@gmail.com"},

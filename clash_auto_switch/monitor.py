@@ -34,31 +34,34 @@ class PeriodicMonitorRunner:
             print("没有启用的监控任务。")
             return
 
-        with self.tui:
-            self.tui.event("system", f"启动 {len(self.enabled_tasks)} 个监控任务")
-            await self.run_background_tasks()
+        self.tui.configure_callbacks(self.switch_node, self.disable_node)
+        await self.run_background_tasks()
 
     async def run_background_tasks(self) -> None:
         monitor_tasks = [
             asyncio.create_task(self.run_task(task), name=task.service_name)
             for task in self.enabled_tasks
         ]
+        tui_task = asyncio.create_task(self.tui.run_async(), name="tui")
+        self.tui.event("system", f"启动 {len(self.enabled_tasks)} 个监控任务")
+
         refresh_task = None
-        interaction_task = None
         if not self.config.monitoring.once:
             refresh_task = asyncio.create_task(self.refresh_loop(), name="tui_refresh")
-            interaction_task = asyncio.create_task(
-                self.tui.run_interaction(self.switch_node, self.disable_node),
-                name="tui_interaction",
-            )
 
         try:
-            if interaction_task is None:
+            if self.config.monitoring.once:
                 await asyncio.gather(*monitor_tasks)
+                self.tui.exit()
+                with suppress(asyncio.CancelledError):
+                    await tui_task
                 return
 
+            active_tasks = [*monitor_tasks, tui_task]
+            if refresh_task is not None:
+                active_tasks.append(refresh_task)
             done, pending = await asyncio.wait(
-                [*monitor_tasks, refresh_task, interaction_task],
+                active_tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for completed in done:
@@ -70,10 +73,11 @@ class PeriodicMonitorRunner:
                     await task
         except Exception as exc:
             self.tui.event("system", f"监控任务异常: {exc}")
-            for task in [*monitor_tasks, refresh_task, interaction_task]:
+            self.tui.exit()
+            for task in [*monitor_tasks, refresh_task, tui_task]:
                 if task is not None and not task.done():
                     task.cancel()
-            for task in [*monitor_tasks, refresh_task, interaction_task]:
+            for task in [*monitor_tasks, refresh_task, tui_task]:
                 if task is not None:
                     with suppress(asyncio.CancelledError):
                         await task
@@ -85,11 +89,13 @@ class PeriodicMonitorRunner:
             is_new_proxy = True
             self.tui.event(task.service_name, f"开始监控 | 代理组: {task.proxy_group_name}")
             await self.update_tui_service(clash, task)
+            await self.update_tui_connections_if_selected(clash)
 
             while True:
                 probe_func = probe_service_multi if is_new_proxy else probe_service
                 ok, switched = await self.check_task(clash, task, probe_func)
                 await self.update_tui_service(clash, task)
+                await self.update_tui_connections_if_selected(clash)
                 is_new_proxy = False
 
                 if switched:
@@ -114,6 +120,7 @@ class PeriodicMonitorRunner:
         async def after_switch(_node_name: str) -> None:
             await close_task_service_connections_best_effort(clash, task, self.tui.event)
             await self.update_tui_service(clash, task)
+            await self.update_tui_connections_if_selected(clash)
 
         if self.config.monitoring.once:
             result = await switch_until_service_available(
@@ -155,6 +162,7 @@ class PeriodicMonitorRunner:
             status = "服务可用" if ok else "服务不可用"
             self.tui.event(task.service_name, f"{status} | {status_text} | 节点: {node_name}")
             await self.update_tui_service(clash, task)
+            await self.update_tui_connections(clash, task)
 
     async def disable_node(self, task: ProxyServicePair, node_name: str) -> None:
         if not disable_node_for_task(self.config, task, node_name):
@@ -163,12 +171,14 @@ class PeriodicMonitorRunner:
         self.tui.event(task.service_name, f"禁用节点 | {node_name}")
         async with self.open_clash() as clash:
             await self.update_tui_service(clash, task)
+            await self.update_tui_connections_if_selected(clash)
 
     async def refresh_loop(self) -> None:
         async with self.open_clash() as clash:
             while True:
                 for task in self.enabled_tasks:
                     await self.update_tui_service(clash, task)
+                await self.update_tui_connections_if_selected(clash)
                 await asyncio.sleep(TUI_REFRESH_INTERVAL_SEC)
 
     async def update_tui_service(self, clash: ClashProxyState, task: ProxyServicePair) -> None:
@@ -184,6 +194,21 @@ class PeriodicMonitorRunner:
             self.storage,
             disabled_node_names=disabled_node_names_for_task(self.config, task),
         )
+
+    async def update_tui_connections_if_selected(self, clash: ClashProxyState) -> None:
+        task = self.tui.selected_task()
+        if task is None:
+            return
+        await self.update_tui_connections(clash, task)
+
+    async def update_tui_connections(self, clash: ClashProxyState, task: ProxyServicePair) -> None:
+        try:
+            connections_payload = await clash.get_connections()
+        except Exception as exc:
+            self.tui.update_connections(task, error=str(exc))
+            return
+
+        self.tui.update_connections(task, connections_payload)
 
     def open_clash(self):
         return ClashStateContext(self.config)

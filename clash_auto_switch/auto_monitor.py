@@ -68,15 +68,15 @@ class AutoMonitorRunner:
             print("没有可自动触发的启用任务。")
             return
 
-        with self.tui:
-            async with ClashClient.from_external_controller(
-                self.config.clash.controller,
-                secret=self.config.clash.secret,
-            ) as client:
-                self.clash = ClashProxyState(client)
-                self.tui.event("system", f"启动 auto 模式 | 监听 {len(self.watched_tasks)} 个服务")
-                await self.refresh_all_services()
-                await self.run_background_tasks()
+        self.tui.configure_callbacks(self.switch_node, self.disable_node)
+        async with ClashClient.from_external_controller(
+            self.config.clash.controller,
+            secret=self.config.clash.secret,
+        ) as client:
+            self.clash = ClashProxyState(client)
+            self.tui.event("system", f"启动 auto 模式 | 监听 {len(self.watched_tasks)} 个服务")
+            await self.refresh_all_services()
+            await self.run_background_tasks()
 
     def _watched_tasks(self) -> list[ProxyServicePair]:
         tasks_by_service = {
@@ -95,15 +95,18 @@ class AutoMonitorRunner:
 
     async def run_background_tasks(self) -> None:
         tasks = [
+            asyncio.create_task(self.tui.run_async(), name="tui"),
             asyncio.create_task(self.consume_logs(), name="auto_log_consumer"),
-            asyncio.create_task(self.tui.run_interaction(self.switch_node, self.disable_node), name="tui_interaction"),
             asyncio.create_task(self.refresh_loop(), name="tui_refresh"),
         ]
-        pending: set[asyncio.Task] = set()
+        pending = set()
         try:
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for completed in done:
                 completed.result()
+        except Exception:
+            self.tui.exit()
+            raise
         finally:
             for task in [*pending, *self.running_checks.values()]:
                 if not task.done():
@@ -167,6 +170,7 @@ class AutoMonitorRunner:
             assert self.clash is not None
             await close_task_service_connections_best_effort(self.clash, task, self.tui.event)
             await self.update_tui_service(task)
+            await self.update_tui_connections_if_selected()
 
         result = await switch_until_service_available(
             self.clash,
@@ -180,6 +184,7 @@ class AutoMonitorRunner:
             after_switch=after_switch,
         )
         await self.update_tui_service(task)
+        await self.update_tui_connections_if_selected()
 
         if result.switched:
             self.last_switch_at[service_name] = time.monotonic()
@@ -196,6 +201,7 @@ class AutoMonitorRunner:
         status = "服务可用" if ok else "服务不可用"
         self.tui.event(task.service_name, f"{status} | {status_text} | 节点: {node_name}")
         await self.update_tui_service(task)
+        await self.update_tui_connections(task)
 
     async def disable_node(self, task: ProxyServicePair, node_name: str) -> None:
         if not disable_node_for_task(self.config, task, node_name):
@@ -203,6 +209,7 @@ class AutoMonitorRunner:
             return
         self.tui.event(task.service_name, f"禁用节点 | {node_name}")
         await self.update_tui_service(task)
+        await self.update_tui_connections_if_selected()
 
     async def refresh_loop(self) -> None:
         while True:
@@ -212,6 +219,7 @@ class AutoMonitorRunner:
     async def refresh_all_services(self) -> None:
         for task in self.watched_tasks:
             await self.update_tui_service(task)
+        await self.update_tui_connections_if_selected()
 
     async def update_tui_service(self, task: ProxyServicePair) -> None:
         assert self.clash is not None
@@ -227,3 +235,19 @@ class AutoMonitorRunner:
             self.storage,
             disabled_node_names=disabled_node_names_for_task(self.config, task),
         )
+
+    async def update_tui_connections_if_selected(self) -> None:
+        task = self.tui.selected_task()
+        if task is None:
+            return
+        await self.update_tui_connections(task)
+
+    async def update_tui_connections(self, task: ProxyServicePair) -> None:
+        assert self.clash is not None
+        try:
+            connections_payload = await self.clash.get_connections()
+        except Exception as exc:
+            self.tui.update_connections(task, error=str(exc))
+            return
+
+        self.tui.update_connections(task, connections_payload)
