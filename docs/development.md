@@ -58,7 +58,7 @@ Responsibilities:
 Responsibilities:
 
 - Start one periodic task per enabled config task.
-- Re-check and switch until available for `--once`.
+- Re-check and switch until available for `run-once`.
 - Respect disabled nodes from config.
 - Handle TUI manual switching and node disabling.
 
@@ -143,8 +143,8 @@ uv run python -m clash_auto_switch --help
 uv run python -m clash_auto_switch.core.service_tester --service youtube_music --debug
 ```
 
-When debugging live switching, prefer `--debug-switch` before running the TUI:
+When debugging live switching, prefer `debug-switch` before running the TUI:
 
 ```powershell
-uv run python -m clash_auto_switch --debug-switch Youtube youtube_music
+uv run python -m clash_auto_switch debug-switch Youtube youtube_music
 ```

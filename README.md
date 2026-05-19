@@ -42,13 +42,13 @@ uv run python -m clash_auto_switch --help
 ### 2. 生成配置
 
 ```powershell
-uv run python -m clash_auto_switch --generate-config
+uv run python -m clash_auto_switch generate-config
 ```
 
 查看配置文件路径：
 
 ```powershell
-uv run python -m clash_auto_switch --show-config
+uv run python -m clash_auto_switch show-config
 ```
 
 配置文件默认位置：
@@ -100,19 +100,19 @@ uv run python -m clash_auto_switch --show-config
 周期监控模式：
 
 ```powershell
-uv run python -m clash_auto_switch
+uv run python -m clash_auto_switch monitor
 ```
 
 只运行一次，直到服务切换到可用节点后退出：
 
 ```powershell
-uv run python -m clash_auto_switch --once
+uv run python -m clash_auto_switch run-once
 ```
 
 auto 模式，根据 Clash 实时日志触发检测：
 
 ```powershell
-uv run python -m clash_auto_switch --auto
+uv run python -m clash_auto_switch auto
 ```
 
 auto 模式只在检测到对应服务的连接日志时触发检测。例如访问 `music.youtube.com` 时，会触发 `youtube_music` 任务。
@@ -165,7 +165,7 @@ auto 模式只在检测到对应服务的连接日志时触发检测。例如访
 
 - `interval_sec`: 周期模式检测间隔，单位秒。
 - `max_rotations`: 最大连续切换次数，`0` 表示不限制。
-- `once`: 是否只运行一次。命令行 `--once` 会覆盖这个值。
+- `once`: 是否只运行一次。`run-once` 命令会覆盖这个值。
 
 ### `tasks`
 
@@ -227,25 +227,25 @@ auto 模式只在检测到对应服务的连接日志时触发检测。例如访
 查看当前配置：
 
 ```powershell
-uv run python -m clash_auto_switch --show-config
+uv run python -m clash_auto_switch show-config
 ```
 
 查看历史统计：
 
 ```powershell
-uv run python -m clash_auto_switch --show-stats
+uv run python -m clash_auto_switch stats
 ```
 
 查看指定服务的节点统计：
 
 ```powershell
-uv run python -m clash_auto_switch --show-stats-detail "Youtube" "youtube_music"
+uv run python -m clash_auto_switch stats "Youtube" "youtube_music"
 ```
 
 调试指定 ProxyGroup 的切换候选排序，不执行切换：
 
 ```powershell
-uv run python -m clash_auto_switch --debug-switch "Youtube" "youtube_music"
+uv run python -m clash_auto_switch debug-switch "Youtube" "youtube_music"
 ```
 
 单独调试 YouTube Music 检测：
@@ -257,7 +257,7 @@ uv run python -m clash_auto_switch.core.service_tester --service youtube_music -
 清除节点历史统计：
 
 ```powershell
-uv run python -m clash_auto_switch --clear-stats
+uv run python -m clash_auto_switch clear-stats
 ```
 
 ## Clash 配置参考

@@ -25,61 +25,68 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "持续检测多个服务是否可用；若不可用则在指定Clash代理组内切换到下一个节点。\n"
-            "所有配置通过配置文件管理，使用 --generate-config 创建配置文件。"
+            "主要命令: auto, monitor, run-once。使用 generate-config 创建配置文件。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
 
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="只运行一次，不持续监控",
-        default=False,
-    )
-    parser.add_argument(
-        "--auto",
-        action="store_true",
+    subparsers.add_parser(
+        "auto",
         help="根据 Clash 实时连接日志自动触发服务检测",
-        default=False,
+        description="根据 Clash 实时连接日志自动触发服务检测和切换。",
     )
-    parser.add_argument(
-        "--show-stats",
-        action="store_true",
-        help="显示所有有数据的服务统计信息并退出",
-        default=False,
+    subparsers.add_parser(
+        "monitor",
+        help="周期检测所有启用服务",
+        description="按配置中的 monitoring.interval_sec 周期检测所有启用服务。",
     )
-    parser.add_argument(
-        "--show-stats-detail",
-        type=str,
-        nargs=2,
-        metavar=("PROXY_GROUP", "SERVICE"),
-        help="显示指定代理组和服务的详细节点统计信息并退出",
+    subparsers.add_parser(
+        "run-once",
+        help="只运行一轮检测并退出",
+        description="只运行一轮检测，直到服务切换到可用节点后退出。",
     )
-    parser.add_argument(
-        "--debug-switch",
-        type=str,
-        nargs=2,
-        metavar=("PROXY_GROUP", "SERVICE"),
-        help="调试指定代理组和服务的切换候选节点排序，不执行切换",
+
+    stats_parser = subparsers.add_parser(
+        "stats",
+        help="显示节点统计信息",
+        description="显示所有服务的节点统计信息，或指定 ProxyGroup/service 的详情。",
     )
-    parser.add_argument(
-        "--clear-stats",
-        action="store_true",
+    stats_parser.add_argument(
+        "proxy_group",
+        nargs="?",
+        help="ProxyGroup 名称；提供时必须同时提供 service",
+    )
+    stats_parser.add_argument(
+        "service",
+        nargs="?",
+        help="服务名称",
+    )
+
+    debug_parser = subparsers.add_parser(
+        "debug-switch",
+        help="调试切换候选排序，不执行切换",
+        description="调试指定 ProxyGroup/service 的切换候选排序，不执行切换。",
+    )
+    debug_parser.add_argument("proxy_group", metavar="PROXY_GROUP")
+    debug_parser.add_argument("service", metavar="SERVICE")
+
+    subparsers.add_parser(
+        "clear-stats",
         help="清除节点统计信息",
-        default=False,
+        description="清除本地节点统计信息。",
     )
-    parser.add_argument(
-        "--show-config",
-        action="store_true",
+    subparsers.add_parser(
+        "show-config",
         help="显示当前配置文件位置和内容",
-        default=False,
+        description="显示当前配置文件位置和内容。",
     )
-    parser.add_argument(
-        "--generate-config",
-        action="store_true",
-        help="生成配置文件模板到默认位置并退出",
-        default=False,
+    subparsers.add_parser(
+        "generate-config",
+        help="生成配置文件模板",
+        description="生成配置文件模板到默认位置。",
     )
+
     return parser.parse_args()
 
 
@@ -184,7 +191,7 @@ def show_config_info() -> None:
         data = load_config()
         print(json.dumps(data, indent=2, ensure_ascii=False))
     else:
-        print("配置文件不存在。使用 --generate-config 创建配置文件。")
+        print("配置文件不存在。使用 generate-config 创建配置文件。")
 
 
 def main() -> None:
@@ -192,33 +199,33 @@ def main() -> None:
     args = parse_args()
 
     # Handle utility operations
-    if args.generate_config:
+    if args.command == "generate-config":
         generate_config_template()
         return
 
-    if args.show_config:
+    if args.command == "show-config":
         show_config_info()
         return
 
-    if args.clear_stats:
+    if args.command == "clear-stats":
         get_data_file_path().unlink(missing_ok=True)
         print("节点统计信息已清除")
         return
 
-    if args.show_stats:
+    if args.command == "stats":
+        if (args.proxy_group is None) != (args.service is None):
+            raise SystemExit("stats 需要同时提供 PROXY_GROUP 和 SERVICE，或两个参数都不提供")
+        if args.proxy_group and args.service:
+            show_detailed_statistics(args.service, args.proxy_group)
+            return
         show_all_statistics()
-        return
-
-    if args.show_stats_detail:
-        proxy_group_name, service_name = args.show_stats_detail
-        show_detailed_statistics(service_name, proxy_group_name)
         return
 
     # Load configuration file
     if not has_config():
         print("错误: 配置文件不存在")
-        print("使用 --generate-config 创建配置文件")
-        print("使用 --show-config 查看配置文件信息")
+        print("使用 generate-config 创建配置文件")
+        print("使用 show-config 查看配置文件信息")
         return
 
     config = load_app_config()
@@ -226,22 +233,22 @@ def main() -> None:
         print("错误: 配置文件为空或格式错误")
         return
 
-    if args.debug_switch:
-        proxy_group_name, service_name = args.debug_switch
-        asyncio.run(debug_switch_candidates(config.clash, proxy_group_name, service_name))
+    if args.command == "debug-switch":
+        asyncio.run(debug_switch_candidates(config.clash, args.proxy_group, args.service))
         return
 
-    # Override monitor setting if specified
-    if args.once:
+    if args.command == "run-once":
         config.monitoring.once = True
 
     try:
         config_file = get_config_file_path()
         print(f"使用配置文件: {config_file}")
-        if args.auto:
+        if args.command == "auto":
             asyncio.run(AutoMonitorRunner(config).run())
-        else:
+        elif args.command in {"monitor", "run-once"}:
             asyncio.run(PeriodicMonitorRunner(config).run())
+        else:
+            raise SystemExit(f"未知命令: {args.command}")
     except KeyboardInterrupt:
         print("收到 Ctrl-C，退出。")
         raise SystemExit(130)
