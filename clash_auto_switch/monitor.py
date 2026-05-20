@@ -1,7 +1,8 @@
 import asyncio
 from contextlib import suppress
 
-from clash_auto_switch.config import disable_node_for_task, disabled_node_names_for_task
+from clash_auto_switch.config import disabled_node_names_for_task, toggle_node_disabled_for_task
+from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler, format_interval
 from clash_auto_switch.core.clash_api import ClashClient
 from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.core.connections import close_task_service_connections_best_effort
@@ -10,7 +11,11 @@ from clash_auto_switch.core.proxy_switcher import (
     switch_proxy_group_and_verify,
     switch_until_service_available,
 )
-from clash_auto_switch.core.service_tester import probe_service, probe_service_multi
+from clash_auto_switch.core.service_tester import (
+    probe_service,
+    probe_service_multi,
+    service_debug_event_handler,
+)
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
 from clash_auto_switch.tui import MonitorTui
@@ -27,6 +32,7 @@ class PeriodicMonitorRunner:
         self.storage = NodeHistoryStorage()
         self.enabled_tasks = [task for task in config.tasks if task.enabled]
         self.tui = MonitorTui(self.enabled_tasks)
+        self.check_scheduler = AdaptiveCheckScheduler()
 
     async def run(self) -> None:
         self.storage.startup_cleanup()
@@ -34,7 +40,11 @@ class PeriodicMonitorRunner:
             print("没有启用的监控任务。")
             return
 
-        self.tui.configure_callbacks(self.switch_node, self.disable_node)
+        self.tui.configure_callbacks(
+            self.switch_node,
+            self.disable_node,
+            check_service=self.check_service,
+        )
         await self.run_background_tasks()
 
     async def run_background_tasks(self) -> None:
@@ -94,6 +104,11 @@ class PeriodicMonitorRunner:
             while True:
                 probe_func = probe_service_multi if is_new_proxy else probe_service
                 ok, switched = await self.check_task(clash, task, probe_func)
+                schedule = self.check_scheduler.record_result(task.service_name, ok and not switched)
+                self.tui.event(
+                    task.service_name,
+                    f"下次自动检测最短间隔: {format_interval(schedule.interval_sec)}",
+                )
                 await self.update_tui_service(clash, task)
                 await self.update_tui_connections_if_selected(clash)
                 is_new_proxy = False
@@ -106,15 +121,15 @@ class PeriodicMonitorRunner:
                 if self.config.monitoring.once:
                     return
                 if ok:
-                    await asyncio.sleep(self.config.monitoring.interval_sec)
+                    await asyncio.sleep(schedule.interval_sec)
                     continue
                 if self.should_pause_after_rotations(rotations):
                     self.tui.event(task.service_name, f"暂停监控 | 已达到最大切换次数 ({self.config.monitoring.max_rotations})")
                     rotations = 0
-                    await asyncio.sleep(max(self.config.monitoring.interval_sec, 30.0))
+                    await asyncio.sleep(max(schedule.interval_sec, 30.0))
                     continue
                 if not switched:
-                    await asyncio.sleep(self.config.monitoring.interval_sec)
+                    await asyncio.sleep(schedule.interval_sec)
 
     async def check_task(self, clash: ClashProxyState, task: ProxyServicePair, probe_func) -> tuple[bool, bool]:
         async def after_switch(_node_name: str) -> None:
@@ -157,18 +172,37 @@ class PeriodicMonitorRunner:
             self.tui.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
             await close_task_service_connections_best_effort(clash, task, self.tui.event)
 
-            ok, status_text = await probe_service(task.service_name, self.config.clash.http_proxy)
+            with service_debug_event_handler(self.tui.event):
+                ok, status_text = await probe_service(task.service_name, self.config.clash.http_proxy)
             self.storage.record_node_status(node_name, task.service_name, task.proxy_group_name, ok)
+            schedule = self.check_scheduler.record_result(task.service_name, ok)
             status = "服务可用" if ok else "服务不可用"
             self.tui.event(task.service_name, f"{status} | {status_text} | 节点: {node_name}")
+            self.tui.event(task.service_name, f"下次自动检测最短间隔: {format_interval(schedule.interval_sec)}")
+            await self.update_tui_service(clash, task)
+            await self.update_tui_connections(clash, task)
+
+    async def check_service(self, task: ProxyServicePair) -> None:
+        async with self.open_clash() as clash:
+            self.tui.event(task.service_name, "手动触发检测")
+            ok, switched = await self.check_task(clash, task, probe_service)
+            schedule = self.check_scheduler.record_result(task.service_name, ok and not switched)
+            self.tui.event(
+                task.service_name,
+                f"下次自动检测最短间隔: {format_interval(schedule.interval_sec)}",
+            )
+            if switched:
+                await self.update_tui_connections_if_selected(clash)
             await self.update_tui_service(clash, task)
             await self.update_tui_connections(clash, task)
 
     async def disable_node(self, task: ProxyServicePair, node_name: str) -> None:
-        if not disable_node_for_task(self.config, task, node_name):
-            self.tui.event(task.service_name, f"禁用节点失败 | {node_name}")
+        was_disabled = node_name in disabled_node_names_for_task(self.config, task)
+        if not toggle_node_disabled_for_task(self.config, task, node_name):
+            self.tui.event(task.service_name, f"切换禁用状态失败 | {node_name}")
             return
-        self.tui.event(task.service_name, f"禁用节点 | {node_name}")
+        action = "取消禁用节点" if was_disabled else "禁用节点"
+        self.tui.event(task.service_name, f"{action} | {node_name}")
         async with self.open_clash() as clash:
             await self.update_tui_service(clash, task)
             await self.update_tui_connections_if_selected(clash)

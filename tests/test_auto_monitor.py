@@ -13,6 +13,14 @@ class AutoTriggerTest(unittest.TestCase):
             }
         )
 
+    def make_entry_for_process(self, host: str, process: str) -> ClashLogEntry:
+        return ClashLogEntry.from_api_item(
+            {
+                "type": "info",
+                "payload": f"[TCP] 127.0.0.1:12345({process}) --> {host}:443 match Match using Proxy[node-a]",
+            }
+        )
+
     def test_youtube_music_log_triggers_youtube_music(self) -> None:
         self.assertEqual(
             match_auto_trigger_service(self.make_entry("music.youtube.com")),
@@ -46,6 +54,11 @@ class AutoTriggerTest(unittest.TestCase):
         self.assertEqual(
             match_auto_trigger_service(self.make_entry("music.youtube.com")),
             "youtube_music",
+        )
+
+    def test_python_probe_logs_do_not_trigger_auto_check(self) -> None:
+        self.assertIsNone(
+            match_auto_trigger_service(self.make_entry_for_process("www.youtube.com", "python.exe"))
         )
 
 

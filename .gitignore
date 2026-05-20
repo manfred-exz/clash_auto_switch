@@ -1,6 +1,6 @@
 .venv/
 __pycache__/
-samples/
+
 *.dist/
 *.build/
 *.exe
@@ -12,3 +12,6 @@ samples/
 *.pywz
 *.pyzw
 *.pyzwz
+
+samples/
+dev/

@@ -76,7 +76,7 @@ The intended flow is:
    - node history records
    - disabled node names from config
 
-Disabled nodes are filtered out of the visible list.
+Disabled nodes are shown at the end of the visible list with a disabled marker, but are skipped by automatic switching.
 
 Connection display follows the same rule:
 
@@ -85,6 +85,8 @@ Connection display follows the same rule:
 3. TUI filters and formats connections for the currently selected service using service host patterns.
 
 The TUI owns keyboard state, selected service, selected node, and Textual widgets. Runners own Clash API calls, service checks, switching, disabling, and connection refresh scheduling.
+
+Auto mode also writes structured diagnostics to `diagnostics.jsonl` under `get_data_directory()`. Use this file when investigating unexpected checks or switches; it records trigger logs, current node snapshots, check start/end, connection snapshots, and TUI-visible events.
 
 ## Configuration
 
@@ -104,19 +106,19 @@ Node history belongs in `NodeHistoryStorage`; user policy belongs in config.
 1. Add an async checker in `core/service_tester.py` returning `TestResultItem`.
 2. Add aliases to `SERVICE_ALIASES`.
 3. Register the checker in `SERVICE_CHECKERS`.
-4. For auto mode, add trigger host patterns in `SERVICE_LOG_HOST_PATTERNS`.
+4. For auto mode, add trigger host patterns in `core/service_hosts.py`.
 
 Keep checkers conservative: return `Yes` only when the service is actually usable.
 
 ## Adding Auto Trigger Hosts
 
-Add hosts to `SERVICE_LOG_HOST_PATTERNS` in `auto_monitor.py`.
+Add hosts to `SERVICE_HOST_PATTERNS` in `core/service_hosts.py`.
 
 Patterns are substring matches against the parsed destination host and raw log payload. Prefer specific hostnames to broad domains when two services share infrastructure, for example YouTube Premium and YouTube Music.
 
 ## Manual Node Disable
 
-The TUI `d` key disables the currently selected node for exactly one `(proxy_group_name, service_name)` pair.
+The TUI `d` key toggles disabled state for the currently selected node for exactly one `(proxy_group_name, service_name)` pair.
 
 Disabled nodes are saved to `config.json`:
 
@@ -130,7 +132,7 @@ Disabled nodes are saved to `config.json`:
 ]
 ```
 
-Disabled nodes are hidden in the TUI and skipped by automatic switching.
+Disabled nodes are shown at the end of the TUI node list and skipped by automatic switching.
 
 ## Verification
 

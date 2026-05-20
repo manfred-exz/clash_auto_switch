@@ -4,10 +4,15 @@ from clash_auto_switch.core.service_tester import (
     CLAUDE_BLOCKED_CODES,
     SERVICE_CHECKERS,
     extract_youtube_music_api_config,
+    extract_youtube_music_visitor_data,
     normalize_service_name,
+    parse_emby_public_server_info,
+    parse_youtube_music_api_response,
+    parse_youtube_premium_page,
     parse_trace_country,
     parse_youtube_music_page,
     parse_youtube_music_player_response,
+    summarize_youtube_music_player_statuses,
 )
 
 
@@ -78,6 +83,7 @@ class ServiceTesterTest(unittest.TestCase):
     def test_service_checker_registration_defaults(self) -> None:
         self.assertIn("chatgpt", SERVICE_CHECKERS)
         self.assertIn("claude", SERVICE_CHECKERS)
+        self.assertIn("emby_as174", SERVICE_CHECKERS)
         self.assertNotIn("bilibili_mainland", SERVICE_CHECKERS)
         self.assertNotIn("bilibili_hk_mc_tw", SERVICE_CHECKERS)
 
@@ -98,6 +104,32 @@ class ServiceTesterTest(unittest.TestCase):
             ("key", "1.0", "TW"),
         )
 
+    def test_extract_youtube_music_visitor_data(self) -> None:
+        self.assertEqual(
+            extract_youtube_music_visitor_data(
+                'ytcfg.set({"VISITOR_DATA":"visitor-token"});'
+            ),
+            "visitor-token",
+        )
+        self.assertEqual(
+            extract_youtube_music_visitor_data('{"visitorData":"visitor-token-2"}'),
+            "visitor-token-2",
+        )
+
+    def test_parse_youtube_premium_available_page(self) -> None:
+        self.assertEqual(
+            parse_youtube_premium_page('ytcfg.set({"INNERTUBE_API_KEY":"key","GL":"SG"});'),
+            ("Yes", "🇸🇬SG"),
+        )
+
+    def test_parse_youtube_premium_unavailable_page(self) -> None:
+        self.assertEqual(
+            parse_youtube_premium_page(
+                "YouTube Premium is not available in your country"
+            ),
+            ("No", None),
+        )
+
     def test_parse_youtube_music_player_response(self) -> None:
         self.assertEqual(
             parse_youtube_music_player_response(
@@ -107,6 +139,38 @@ class ServiceTesterTest(unittest.TestCase):
                 }
             ),
             "Yes",
+        )
+
+    def test_summarize_youtube_music_player_statuses(self) -> None:
+        self.assertEqual(
+            summarize_youtube_music_player_statuses(["No", "Yes"]),
+            "Yes",
+        )
+        self.assertEqual(
+            summarize_youtube_music_player_statuses(["No", "No"]),
+            "No",
+        )
+        self.assertEqual(
+            summarize_youtube_music_player_statuses(
+                ["No", "Failed (Player ERROR)"]
+            ),
+            "Failed (Player ERROR)",
+        )
+
+    def test_parse_youtube_music_api_response(self) -> None:
+        self.assertEqual(
+            parse_youtube_music_api_response({"contents": {"sectionListRenderer": {}}}),
+            "Yes",
+        )
+        self.assertEqual(
+            parse_youtube_music_api_response({"background": {"musicThumbnailRenderer": {}}}),
+            "Yes",
+        )
+        self.assertEqual(
+            parse_youtube_music_api_response(
+                {"error": {"code": 403, "status": "PERMISSION_DENIED"}}
+            ),
+            "Failed (API 403)",
         )
         self.assertEqual(
             parse_youtube_music_player_response(

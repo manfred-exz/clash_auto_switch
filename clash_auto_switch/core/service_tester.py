@@ -1,4 +1,6 @@
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 import html
 import json
 import re
@@ -6,7 +8,25 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime
 import httpx
-from typing import Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterator, List, Optional, Tuple
+
+from clash_auto_switch.core.diagnostic_log import DiagnosticLogger
+
+
+ServiceDebugEventFunc = Callable[[str, str], None]
+_SERVICE_DEBUG_EVENT_HANDLER: ContextVar[Optional[ServiceDebugEventFunc]] = ContextVar(
+    "service_debug_event_handler",
+    default=None,
+)
+
+
+@contextmanager
+def service_debug_event_handler(handler: Optional[ServiceDebugEventFunc]) -> Iterator[None]:
+    token = _SERVICE_DEBUG_EVENT_HANDLER.set(handler)
+    try:
+        yield
+    finally:
+        _SERVICE_DEBUG_EVENT_HANDLER.reset(token)
 
 
 # 定义解锁测试项目的结构
@@ -214,6 +234,43 @@ async def check_gemini(proxy: Optional[str] = None) -> TestResultItem:
     return TestResultItem("Gemini", status, region=region)
 
 # 测试 YouTube Premium
+def parse_youtube_premium_page(body: str) -> tuple[str, Optional[str]]:
+    if not body:
+        return "Failed", None
+
+    normalized_body = normalize_response_text(body)
+    body_lower = normalized_body.lower()
+    if "youtube premium is not available in your country" in body_lower:
+        return "No", None
+
+    region = None
+    for pattern in (
+        r'id="country-code"[^>]*>([^<]+)<',
+        r'"GL":"([A-Z]{2})"',
+        r'"countryCode":"([A-Z]{2})"',
+        r'"regionCode":"([A-Z]{2})"',
+    ):
+        match = re.search(pattern, normalized_body)
+        if match:
+            country_code = match.group(1).strip().upper()
+            if len(country_code) == 2:
+                region = f"{country_code_to_emoji(country_code)}{country_code}"
+                break
+
+    if any(
+        indicator in body_lower
+        for indicator in (
+            "ad-free",
+            "youtube premium",
+            "innertube_api_key",
+            "ytcfg.set",
+        )
+    ):
+        return "Yes", region
+
+    return "Failed (Unexpected Page)", region
+
+
 async def check_youtube_premium(proxy: Optional[str] = None) -> TestResultItem:
     url = "https://www.youtube.com/premium"
     async with create_http_client(proxy) as client:
@@ -228,17 +285,7 @@ async def check_youtube_premium(proxy: Optional[str] = None) -> TestResultItem:
             if not body:
                 return TestResultItem("Youtube Premium", "Failed", region=None)
 
-            body_lower = body.lower()
-
-            if "youtube premium is not available in your country" in body_lower:
-                status = "No"
-            elif "ad-free" in body_lower:
-                status = "Yes"
-                match = re.search(r'id="country-code"[^>]*>([^<]+)<', body)
-                if match:
-                    country_code = match.group(1).strip()
-                    emoji = country_code_to_emoji(country_code)
-                    region = f"{emoji}{country_code}"
+            status, region = parse_youtube_premium_page(body)
         except httpx.HTTPStatusError as e:
             status = f"Failed (HTTP {e.response.status_code})"
         except httpx.RequestError as e:
@@ -300,6 +347,14 @@ def parse_youtube_music_page(body: str) -> tuple[str, Optional[str]]:
     return "Failed (Unexpected Page)", region
 
 
+YOUTUBE_MUSIC_DEFAULT_API_KEY = "REDACTED_YTM_API_KEY"
+YOUTUBE_MUSIC_PROBE_VIDEO_IDS = (
+    "kJQP7kiw5Fk",  # Luis Fonsi - Despacito
+    "JGwWNGJdvx8",  # Ed Sheeran - Shape of You
+    "9bZkp7q19f0",  # PSY - Gangnam Style
+)
+
+
 def extract_youtube_music_api_config(body: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     normalized_body = normalize_response_text(body)
 
@@ -312,6 +367,32 @@ def extract_youtube_music_api_config(body: str) -> tuple[Optional[str], Optional
         version_match.group(1) if version_match else None,
         gl_match.group(1).upper() if gl_match else None,
     )
+
+
+def extract_youtube_music_visitor_data(body: str) -> Optional[str]:
+    normalized_body = normalize_response_text(body)
+    for pattern in (
+        r'"VISITOR_DATA":"([^"]+)"',
+        r'"visitorData":"([^"]+)"',
+    ):
+        match = re.search(pattern, normalized_body)
+        if match:
+            return match.group(1)
+    return None
+
+
+def build_youtube_music_context(client_version: str, gl: Optional[str]) -> Dict:
+    return {
+        "context": {
+            "client": {
+                "clientName": "WEB_REMIX",
+                "clientVersion": client_version,
+                "hl": "zh-CN",
+                "gl": gl or "US",
+            },
+            "user": {},
+        }
+    }
 
 
 def parse_youtube_music_player_response(data: Dict) -> str:
@@ -331,6 +412,132 @@ def parse_youtube_music_player_response(data: Dict) -> str:
         return f"Failed (Player {status})"
 
     return "Failed (Unexpected Player Response)"
+
+
+def summarize_youtube_music_player_statuses(statuses: List[str]) -> str:
+    if any(status == "Yes" for status in statuses):
+        return "Yes"
+    if statuses and all(status == "No" for status in statuses):
+        return "No"
+    failed = next((status for status in statuses if status.startswith("Failed")), None)
+    return failed or "Failed (Unexpected Player Response)"
+
+
+def parse_youtube_music_api_response(data: Dict) -> str:
+    """Parse a YouTube Music browse/search API response."""
+    if data.get("contents") or data.get("background"):
+        return "Yes"
+
+    error = data.get("error")
+    if isinstance(error, dict):
+        code = error.get("code")
+        status = error.get("status")
+        message = error.get("message")
+        return f"Failed (API {code or status or message or 'Error'})"
+
+    if data.get("responseContext"):
+        return "Failed (API Missing Contents)"
+
+    return "Failed (Unexpected API Response)"
+
+
+async def request_youtube_music_api(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    body: Dict,
+    api_key: str,
+    visitor_data: Optional[str],
+) -> Dict:
+    headers = {
+        "Origin": "https://music.youtube.com",
+        "Referer": "https://music.youtube.com/",
+    }
+    if visitor_data:
+        headers["X-Goog-Visitor-Id"] = visitor_data
+
+    response = await client.post(
+        f"https://music.youtube.com/youtubei/v1/{endpoint}?alt=json&key={api_key}",
+        json=body,
+        headers=headers,
+        cookies={"SOCS": "CAI"},
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def check_youtube_music_playability(
+    client: httpx.AsyncClient,
+    api_key: str,
+    context: Dict,
+    visitor_data: Optional[str],
+) -> tuple[str, list[dict[str, Any]]]:
+    statuses = []
+    details = []
+    for video_id in YOUTUBE_MUSIC_PROBE_VIDEO_IDS:
+        player_response = await request_youtube_music_api(
+            client,
+            "player",
+            {
+                **context,
+                "videoId": video_id,
+                "playbackContext": {
+                    "contentPlaybackContext": {
+                        "html5Preference": "HTML5_PREF_WANTS",
+                    }
+                },
+            },
+            api_key,
+            visitor_data,
+        )
+        player_status = parse_youtube_music_player_response(player_response)
+        statuses.append(player_status)
+        details.append(
+            {
+                "video_id": video_id,
+                "result": player_status,
+                **youtube_music_player_debug(player_response),
+            }
+        )
+        if statuses[-1] == "Yes":
+            break
+    return summarize_youtube_music_player_statuses(statuses), details
+
+
+def emit_youtube_music_probe_debug(debug: dict[str, Any]) -> None:
+    DiagnosticLogger().write(
+        "youtube_music_probe_debug",
+        service_name="youtube_music",
+        **debug,
+    )
+    handler = _SERVICE_DEBUG_EVENT_HANDLER.get()
+    if handler is None:
+        return
+
+    page = debug.get("page") or {}
+    config = debug.get("config") or {}
+    api = debug.get("api") or {}
+    playability = debug.get("playability") or {}
+    player_items = playability.get("players") or []
+    player_text = ",".join(
+        f"{item.get('video_id')}={item.get('result')}/{item.get('status')}"
+        for item in player_items
+        if isinstance(item, dict)
+    ) or "-"
+    handler(
+        "youtube_music",
+        (
+            "YTMusic检测 | "
+            f"page={page.get('result', '-')} http={page.get('http_status', '-')} "
+            f"region={page.get('region', '-')} len={page.get('length', '-')} | "
+            f"config=key:{config.get('has_api_key', '-')} "
+            f"client:{config.get('client_version', '-')} gl:{config.get('gl', '-')} "
+            f"visitor:{config.get('has_visitor_data', '-')} | "
+            f"api=browse:{api.get('browse_result', '-')} "
+            f"search:{api.get('search_result', '-')} | "
+            f"player={playability.get('result', '-')} [{player_text}] | "
+            f"final={debug.get('final_status', '-')}"
+        ),
+    )
 
 
 def youtube_music_player_debug(data: Dict) -> Dict[str, Optional[str]]:
@@ -358,53 +565,114 @@ async def check_youtube_music(proxy: Optional[str] = None) -> TestResultItem:
             "Chrome/122.0.0.0 Safari/537.36"
         ),
     }
+    debug: dict[str, Any] = {
+        "proxy": proxy,
+        "page": {},
+        "config": {},
+        "api": {},
+        "playability": {"players": []},
+    }
+    status = "Failed"
+    region = None
     async with create_http_client(proxy, custom_headers) as client:
         try:
             response = await client.get(url, follow_redirects=True)
+            debug["page"].update(
+                {
+                    "url": str(response.url),
+                    "http_status": response.status_code,
+                    "length": len(response.text),
+                }
+            )
             response.raise_for_status()
             status, region = parse_youtube_music_page(response.text)
+            debug["page"].update({"result": status, "region": region})
             if status != "Yes":
+                debug["final_status"] = status
+                emit_youtube_music_probe_debug(debug)
                 return TestResultItem("Youtube Music", status, region=region)
 
             api_key, client_version, gl = extract_youtube_music_api_config(response.text)
-            if not api_key or not client_version:
-                return TestResultItem("Youtube Music", "Failed (Missing API Config)", region=region)
-
-            player_response = await client.post(
-                f"https://music.youtube.com/youtubei/v1/player?key={api_key}",
-                json={
-                    "context": {
-                        "client": {
-                            "clientName": "WEB_REMIX",
-                            "clientVersion": client_version,
-                            "hl": "zh-CN",
-                            "gl": gl or "US",
-                        }
-                    },
-                    "videoId": "kJQP7kiw5Fk",
-                    "playbackContext": {
-                        "contentPlaybackContext": {
-                            "html5Preference": "HTML5_PREF_WANTS",
-                        }
-                    },
-                },
-                headers={
-                    "Origin": "https://music.youtube.com",
-                    "Referer": "https://music.youtube.com/",
-                },
+            has_api_key = bool(api_key)
+            visitor_data = extract_youtube_music_visitor_data(response.text)
+            debug["config"].update(
+                {
+                    "has_api_key": has_api_key,
+                    "client_version": client_version,
+                    "gl": gl,
+                    "has_visitor_data": bool(visitor_data),
+                }
             )
-            player_response.raise_for_status()
-            status = parse_youtube_music_player_response(player_response.json())
+            if not client_version:
+                status = "Failed (Missing API Config)"
+                debug["final_status"] = status
+                emit_youtube_music_probe_debug(debug)
+                return TestResultItem("Youtube Music", status, region=region)
+
+            api_key = api_key or YOUTUBE_MUSIC_DEFAULT_API_KEY
+            debug["config"]["used_default_api_key"] = not has_api_key
+            context = build_youtube_music_context(client_version, gl)
+            api_response = await request_youtube_music_api(
+                client,
+                "browse",
+                {**context, "browseId": "FEmusic_home"},
+                api_key,
+                visitor_data,
+            )
+            status = parse_youtube_music_api_response(api_response)
+            debug["api"].update(
+                {
+                    "browse_result": status,
+                    "browse_keys": sorted(api_response.keys()),
+                    "browse_has_contents": bool(api_response.get("contents")),
+                    "browse_has_background": bool(api_response.get("background")),
+                }
+            )
+            if status == "Failed (API Missing Contents)":
+                search_response = await request_youtube_music_api(
+                    client,
+                    "search",
+                    {**context, "query": "Wonderwall"},
+                    api_key,
+                    visitor_data,
+                )
+                status = parse_youtube_music_api_response(search_response)
+                debug["api"].update(
+                    {
+                        "search_result": status,
+                        "search_keys": sorted(search_response.keys()),
+                        "search_has_contents": bool(search_response.get("contents")),
+                    }
+                )
+            if status == "Yes":
+                status, player_details = await check_youtube_music_playability(
+                    client,
+                    api_key,
+                    context,
+                    visitor_data,
+                )
+                debug["playability"].update(
+                    {
+                        "result": status,
+                        "players": player_details,
+                    }
+                )
         except httpx.HTTPStatusError as e:
             status = f"Failed (HTTP {e.response.status_code})"
+            debug["error"] = {"type": type(e).__name__, "message": str(e)}
             region = None
         except ValueError:
-            status = "Failed (Invalid Player Response)"
+            status = "Failed (Invalid API Response)"
+            debug["error"] = {"type": "ValueError", "message": "Invalid API Response"}
             region = None
         except httpx.RequestError as e:
             status = f"Failed (Network: {str(e)[:50]})"
+            debug["error"] = {"type": type(e).__name__, "message": str(e)}
             region = None
 
+    debug["final_status"] = status
+    debug["final_region"] = region
+    emit_youtube_music_probe_debug(debug)
     return TestResultItem("Youtube Music", status, region=region)
 
 
@@ -431,42 +699,66 @@ async def debug_youtube_music(proxy: Optional[str] = None) -> None:
         print(f"api_key: {'yes' if api_key else 'no'}")
         print(f"client_version: {client_version}")
         print(f"gl: {gl}")
-        if not api_key or not client_version:
+        visitor_data = extract_youtube_music_visitor_data(response.text)
+        print(f"visitor_data: {'yes' if visitor_data else 'no'}")
+        if not client_version:
             print("player: skipped (missing api config)")
             return
 
-        player_response = await client.post(
-            f"https://music.youtube.com/youtubei/v1/player?key={api_key}",
-            json={
-                "context": {
-                    "client": {
-                        "clientName": "WEB_REMIX",
-                        "clientVersion": client_version,
-                        "hl": "zh-CN",
-                        "gl": gl or "US",
-                    }
-                },
-                "videoId": "kJQP7kiw5Fk",
-                "playbackContext": {
-                    "contentPlaybackContext": {
-                        "html5Preference": "HTML5_PREF_WANTS",
-                    }
-                },
-            },
-            headers={
-                "Origin": "https://music.youtube.com",
-                "Referer": "https://music.youtube.com/",
-            },
+        api_key = api_key or YOUTUBE_MUSIC_DEFAULT_API_KEY
+        context = build_youtube_music_context(client_version, gl)
+        api_response = await request_youtube_music_api(
+            client,
+            "browse",
+            {**context, "browseId": "FEmusic_home"},
+            api_key,
+            visitor_data,
         )
-        print(f"player_status_code: {player_response.status_code}")
+        print("api_status_code: 200")
         try:
-            player_data = player_response.json()
+            api_data = api_response
         except ValueError:
-            print(f"player_text: {player_response.text[:500]}")
-            return
-        print(f"player_parse: {parse_youtube_music_player_response(player_data)}")
-        for key, value in youtube_music_player_debug(player_data).items():
-            print(f"player_{key}: {value}")
+            print("api_text: invalid json")
+        else:
+            print(f"api_parse: {parse_youtube_music_api_response(api_data)}")
+            print(f"api_has_contents: {bool(api_data.get('contents'))}")
+            if parse_youtube_music_api_response(api_data) == "Failed (API Missing Contents)":
+                search_data = await request_youtube_music_api(
+                    client,
+                    "search",
+                    {**context, "query": "Wonderwall"},
+                    api_key,
+                    visitor_data,
+                )
+                print(f"search_parse: {parse_youtube_music_api_response(search_data)}")
+                print(f"search_has_contents: {bool(search_data.get('contents'))}")
+
+        player_statuses = []
+        for video_id in YOUTUBE_MUSIC_PROBE_VIDEO_IDS:
+            player_data = await request_youtube_music_api(
+                client,
+                "player",
+                {
+                    **context,
+                    "videoId": video_id,
+                    "playbackContext": {
+                        "contentPlaybackContext": {
+                            "html5Preference": "HTML5_PREF_WANTS",
+                        }
+                    },
+                },
+                api_key,
+                visitor_data,
+            )
+            player_parse = parse_youtube_music_player_response(player_data)
+            player_statuses.append(player_parse)
+            print(f"player_video_id: {video_id}")
+            print(f"player_parse: {player_parse}")
+            for key, value in youtube_music_player_debug(player_data).items():
+                print(f"player_{key}: {value}")
+            if player_parse == "Yes":
+                break
+        print(f"player_summary: {summarize_youtube_music_player_statuses(player_statuses)}")
 
 
 # 测试动画疯(Bahamut Anime)
@@ -715,6 +1007,43 @@ async def check_prime_video(proxy: Optional[str] = None) -> TestResultItem:
             return TestResultItem("Prime Video", f"Failed (Network: {str(e)[:50]})")
 
 
+EMBY_AS174_PUBLIC_INFO_URL = "https://emby.as174.de:443/emby/System/Info/Public"
+
+
+def emby_authorization_header() -> str:
+    return (
+        "Emby UserId=,Client=clash-auto-switch,"
+        "Device=clash-auto-switch,DeviceId=clash-auto-switch,Version=0.1.0"
+    )
+
+
+def parse_emby_public_server_info(data: Dict) -> tuple[str, Optional[str]]:
+    server_name = data.get("ServerName")
+    version = data.get("Version")
+    if isinstance(server_name, str) and server_name and isinstance(version, str) and version:
+        return "Yes", f"{server_name} {version}"
+    return "Failed (Invalid Public Info)", None
+
+
+async def check_emby_as174(proxy: Optional[str] = None) -> TestResultItem:
+    custom_headers = {
+        "Accept-Encoding": "gzip",
+        "X-Emby-authorization": emby_authorization_header(),
+    }
+    async with create_http_client(proxy, custom_headers) as client:
+        try:
+            response = await client.get(EMBY_AS174_PUBLIC_INFO_URL)
+            response.raise_for_status()
+            status, server_info = parse_emby_public_server_info(response.json())
+            return TestResultItem("Emby AS174", status, region=server_info)
+        except httpx.HTTPStatusError as e:
+            return TestResultItem("Emby AS174", f"Failed (HTTP {e.response.status_code})")
+        except ValueError:
+            return TestResultItem("Emby AS174", "Failed (Invalid JSON)")
+        except httpx.RequestError as e:
+            return TestResultItem("Emby AS174", f"Failed (Network: {str(e)[:50]})")
+
+
 ServiceChecker = Callable[[Optional[str]], Awaitable[TestResultItem]]
 
 SERVICE_ALIASES = {
@@ -742,6 +1071,9 @@ SERVICE_ALIASES = {
     "prime": "prime_video",
     "prime_video": "prime_video",
     "amazon_prime": "prime_video",
+    "emby": "emby_as174",
+    "emby_as174": "emby_as174",
+    "as174_emby": "emby_as174",
 }
 
 SERVICE_CHECKERS: Dict[str, ServiceChecker] = {
@@ -756,6 +1088,7 @@ SERVICE_CHECKERS: Dict[str, ServiceChecker] = {
     "netflix": check_netflix,
     "disney_plus": check_disney_plus,
     "prime_video": check_prime_video,
+    "emby_as174": check_emby_as174,
 }
 
 
@@ -839,6 +1172,7 @@ async def main(proxy: Optional[str], service: Optional[str] = None, debug: bool 
         check_netflix(proxy),
         check_disney_plus(proxy),
         check_prime_video(proxy),
+        check_emby_as174(proxy),
     ]
 
     results = await asyncio.gather(*tasks)

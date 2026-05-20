@@ -4,70 +4,15 @@ from typing import Any, Callable, Optional
 import httpx
 
 from clash_auto_switch.core.clash_state import ClashProxyState
+from clash_auto_switch.core.service_hosts import connection_host_patterns
 from clash_auto_switch.defs import ProxyServicePair
 
 
 EventFunc = Callable[[str, str], None]
 
 
-SERVICE_CONNECTION_HOST_PATTERNS = {
-    "chatgpt": (
-        "chat.openai.com",
-        "chatgpt.com",
-        "api.openai.com",
-        "oaistatic.com",
-        "oaiusercontent.com",
-    ),
-    "claude": (
-        "claude.ai",
-        "anthropic.com",
-    ),
-    "gemini": (
-        "gemini.google.com",
-        "generativelanguage.googleapis.com",
-        "aistudio.google.com",
-        "ai.google.dev",
-    ),
-    "youtube_music": (
-        "music.youtube.com",
-        "youtubei.googleapis.com",
-        "googlevideo.com",
-        "ytimg.com",
-        "youtube.com",
-    ),
-    "youtube_premium": (
-        "youtube.com",
-        "youtubei.googleapis.com",
-        "googlevideo.com",
-        "ytimg.com",
-    ),
-    "bahamut_anime": (
-        "ani.gamer.com.tw",
-        "gamer.com.tw",
-    ),
-    "netflix": (
-        "netflix.com",
-        "nflxvideo.net",
-        "nflximg.net",
-        "nflxext.com",
-        "fast.com",
-    ),
-    "disney_plus": (
-        "disneyplus.com",
-        "bamgrid.com",
-        "disney-plus.net",
-    ),
-    "prime_video": (
-        "primevideo.com",
-        "amazonvideo.com",
-        "media-amazon.com",
-        "pv-cdn.net",
-    ),
-}
-
-
 def connection_matches_service(connection: dict[str, Any], service_name: str) -> bool:
-    patterns = SERVICE_CONNECTION_HOST_PATTERNS.get(service_name, ())
+    patterns = connection_host_patterns(service_name)
     if not patterns:
         return False
 

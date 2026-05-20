@@ -227,8 +227,9 @@ class TuiNodeScoreTest(unittest.TestCase):
             disabled_node_names={"node-c"},
         )
 
-        self.assertEqual([node.name for node in scores], ["node-b", "node-a"])
+        self.assertEqual([node.name for node in scores], ["node-b", "node-a", "node-c"])
         self.assertEqual(scores[0].score, 0.9)
+        self.assertTrue(scores[-1].disabled)
 
     def test_tui_selection_moves_with_vim_keys(self) -> None:
         tasks = [

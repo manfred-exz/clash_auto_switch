@@ -5,7 +5,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
+from rich.markup import escape
+from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Footer, RichLog, Static
 
@@ -17,6 +20,8 @@ from clash_auto_switch.defs import ProxyServicePair, ServiceRecord
 
 SwitchNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 DisableNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
+ToggleAutoDetectionFunc = Callable[[bool], Awaitable[None]]
+CheckServiceFunc = Callable[[ProxyServicePair], Awaitable[None]]
 
 MAX_CONNECTION_ROWS = 12
 
@@ -28,6 +33,7 @@ class NodeScore:
     status: str = "unknown"
     total_checks: int = 0
     successful_checks: int = 0
+    disabled: bool = False
 
     @property
     def success_rate(self) -> float:
@@ -55,6 +61,7 @@ class ServiceView:
     selected_node_index: int = 0
     connections: list[ConnectionRow] = field(default_factory=list)
     connection_status: str = "等待读取连接"
+    rendered_node_signature: tuple[tuple[str, str, str, bool, bool], ...] = ()
 
 
 class MonitorTui(App[None]):
@@ -104,19 +111,37 @@ class MonitorTui(App[None]):
         height: 7;
         border: round green;
     }
+
+    #status {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+
+    #main.events-maximized {
+        display: none;
+    }
+
+    #events.events-maximized {
+        height: 1fr;
+        border: heavy green;
+    }
     """
 
     BINDINGS = [
-        ("h", "previous_service", "服务-"),
-        ("l", "next_service", "服务+"),
-        ("j", "next_node", "节点+"),
-        ("k", "previous_node", "节点-"),
-        ("enter", "switch_node", "切换"),
-        ("d", "disable_node", "禁用"),
-        ("q", "quit", "退出"),
+        Binding("h", "previous_service", "服务-"),
+        Binding("l", "next_service", "服务+"),
+        Binding("j", "next_node", "节点+"),
+        Binding("k", "previous_node", "节点-"),
+        Binding("enter", "switch_node", "切换", priority=True),
+        Binding("d", "disable_node", "禁用"),
+        Binding("e", "toggle_events", "事件"),
+        Binding("a", "toggle_auto_detection", "自动"),
+        Binding("c", "check_service", "检测"),
+        Binding("q", "quit", "退出"),
     ]
 
-    def __init__(self, tasks: list[ProxyServicePair], *, max_events: int = 50) -> None:
+    def __init__(self, tasks: list[ProxyServicePair], *, max_events: int = 500) -> None:
         super().__init__()
         self._service_order = [task.service_name for task in tasks]
         self._services = {task.service_name: ServiceView(task=task) for task in tasks}
@@ -124,11 +149,17 @@ class MonitorTui(App[None]):
         self._selected_service_index: Optional[int] = 0 if tasks else None
         self._switch_node: Optional[SwitchNodeFunc] = None
         self._disable_node: Optional[DisableNodeFunc] = None
+        self._toggle_auto_detection: Optional[ToggleAutoDetectionFunc] = None
+        self._check_service: Optional[CheckServiceFunc] = None
+        self._auto_detection_available = False
+        self._auto_detection_enabled = True
         self._service_table_ids = {
             task.service_name: f"service-{index}"
             for index, task in enumerate(tasks)
         }
         self._ui_ready = False
+        self._events_maximized = False
+        self._last_refresh_time: Optional[datetime] = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main"):
@@ -138,7 +169,8 @@ class MonitorTui(App[None]):
             with Vertical(id="connection-pane"):
                 yield Static("连接: -", id="connection-title")
                 yield DataTable(id="connections")
-        yield RichLog(id="events", wrap=True, highlight=False, markup=False)
+        yield RichLog(id="events", wrap=True, highlight=False, markup=False, auto_scroll=True)
+        yield Static("最近刷新: -", id="status")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -160,9 +192,15 @@ class MonitorTui(App[None]):
         self,
         switch_node: SwitchNodeFunc,
         disable_node: Optional[DisableNodeFunc] = None,
+        toggle_auto_detection: Optional[ToggleAutoDetectionFunc] = None,
+        check_service: Optional[CheckServiceFunc] = None,
     ) -> None:
         self._switch_node = switch_node
         self._disable_node = disable_node
+        self._toggle_auto_detection = toggle_auto_detection
+        self._check_service = check_service
+        self._auto_detection_available = toggle_auto_detection is not None
+        self._render_status()
 
     def event(self, service_name: str, message: str, *, level: str = "info") -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -172,7 +210,7 @@ class MonitorTui(App[None]):
             self._services[service_name].last_status = message
             self._render_service(self._services[service_name])
         if self._ui_ready:
-            self.query_one("#events", RichLog).write(line)
+            self._write_event_line(line)
 
     def update_service(
         self,
@@ -199,6 +237,7 @@ class MonitorTui(App[None]):
             service.selected_node_index = min(service.selected_node_index, len(service.nodes) - 1)
         else:
             service.selected_node_index = 0
+        self._mark_refreshed()
         self._render_service(service)
         if self._is_selected_service(service):
             self._render_connections()
@@ -222,12 +261,17 @@ class MonitorTui(App[None]):
             count = len(service.connections)
             service.connection_status = f"{count} 个相关连接" if count else "暂无相关连接"
 
+        self._mark_refreshed()
         if self._is_selected_service(service):
             self._render_connections()
 
     def selected_task(self) -> Optional[ProxyServicePair]:
         service = self._selected_service()
         return service.task if service is not None else None
+
+    def set_auto_detection_enabled(self, enabled: bool) -> None:
+        self._auto_detection_enabled = enabled
+        self._render_status()
 
     def selected_node(self) -> Optional[tuple[ProxyServicePair, str]]:
         service = self._selected_service()
@@ -283,7 +327,7 @@ class MonitorTui(App[None]):
     async def action_disable_node(self) -> None:
         selection = self.selected_node()
         if selection is None:
-            self.event("system", "没有可禁用的节点")
+            self.event("system", "没有可切换禁用状态的节点")
             return
         if self._disable_node is None:
             self.event("system", "当前模式不支持禁用节点")
@@ -293,11 +337,47 @@ class MonitorTui(App[None]):
         try:
             await self._disable_node(task, node_name)
         except Exception as exc:
-            self.event(task.service_name, f"禁用节点失败 | {exc}")
+            self.event(task.service_name, f"切换禁用状态失败 | {exc}")
 
     def action_quit(self) -> None:
         self.event("system", "退出")
         self.exit()
+
+    def action_toggle_events(self) -> None:
+        self._events_maximized = not self._events_maximized
+        if self._ui_ready:
+            self._apply_events_layout()
+            if self._events_maximized:
+                self.query_one("#events", RichLog).focus()
+
+    async def action_toggle_auto_detection(self) -> None:
+        if self._toggle_auto_detection is None:
+            self.event("system", "当前模式不支持自动检测开关")
+            return
+
+        next_enabled = not self._auto_detection_enabled
+        self._auto_detection_enabled = next_enabled
+        self._render_status()
+        try:
+            await self._toggle_auto_detection(next_enabled)
+        except Exception as exc:
+            self._auto_detection_enabled = not next_enabled
+            self._render_status()
+            self.event("system", f"切换自动检测失败 | {exc}")
+
+    async def action_check_service(self) -> None:
+        task = self.selected_task()
+        if task is None:
+            self.event("system", "没有可检测的服务")
+            return
+        if self._check_service is None:
+            self.event("system", "当前模式不支持手动检测")
+            return
+
+        try:
+            await self._check_service(task)
+        except Exception as exc:
+            self.event(task.service_name, f"手动检测失败 | {exc}")
 
     def _move_service(self, delta: int) -> None:
         if not self._service_order:
@@ -326,37 +406,50 @@ class MonitorTui(App[None]):
     def _render_all(self) -> None:
         if not self._ui_ready:
             return
+        self._apply_events_layout()
         for service in self._services.values():
             self._render_service(service)
         self._render_connections()
         events = self.query_one("#events", RichLog)
         events.clear()
         for line in self._events:
-            events.write(line)
+            self._write_event_line(line)
+        self._render_status()
+
+    def _write_event_line(self, line: str) -> None:
+        self.query_one("#events", RichLog).write(Text(line))
 
     def _render_service(self, service: ServiceView) -> None:
         if not self._ui_ready:
             return
 
         table = self._service_table(service)
-        table.clear()
-        table.border_title = f"{service.task.service_name} | {service.task.proxy_group_name}"
+        table.border_title = escape(f"{service.task.service_name} | {service.task.proxy_group_name}")
         current_node = service.current_node or "-"
-        table.border_subtitle = f"当前: {current_node} | {service.last_status}"
+        table.border_subtitle = escape(f"当前: {current_node} | {service.last_status}")
         table.set_class(self._is_selected_service(service), "selected")
 
         if not service.nodes:
-            table.add_row("等待读取 ProxyGroup 节点", "-", "-")
+            signature = (("等待读取 ProxyGroup 节点", "-", "-", False, False),)
+            if service.rendered_node_signature != signature:
+                table.clear()
+                table.add_row("等待读取 ProxyGroup 节点", "-", "-")
+                service.rendered_node_signature = signature
             return
 
-        for index, node in enumerate(service.nodes):
-            current_marker = "* " if node.name == service.current_node else "  "
-            table.add_row(
-                f"{current_marker}{node.name}",
-                f"{node.score:.3f}",
-                f"{node.success_rate:.0%}" if node.total_checks else "-",
-                key=str(index),
-            )
+        signature = _node_table_signature(service.nodes, service.current_node)
+        if service.rendered_node_signature != signature:
+            table.clear()
+            for index, (node_name, score, success_rate, is_current, is_disabled) in enumerate(signature):
+                current_marker = "* " if is_current else "  "
+                disabled_marker = " [禁用]" if is_disabled else ""
+                table.add_row(
+                    f"{current_marker}{node_name}{disabled_marker}",
+                    score,
+                    success_rate,
+                    key=str(index),
+                )
+            service.rendered_node_signature = signature
         table.move_cursor(row=service.selected_node_index, column=0, animate=False)
 
     def _render_connections(self) -> None:
@@ -387,6 +480,28 @@ class MonitorTui(App[None]):
     def _is_selected_service(self, service: ServiceView) -> bool:
         return self._selected_service() is service
 
+    def _apply_events_layout(self) -> None:
+        self.query_one("#main").set_class(self._events_maximized, "events-maximized")
+        self.query_one("#events", RichLog).set_class(self._events_maximized, "events-maximized")
+
+    def _mark_refreshed(self) -> None:
+        self._last_refresh_time = datetime.now()
+        self._render_status()
+
+    def _render_status(self) -> None:
+        if not self._ui_ready:
+            return
+        refresh_text = self._last_refresh_time.strftime("%H:%M:%S") if self._last_refresh_time else "-"
+        selected = self._selected_service()
+        selected_text = selected.task.service_name if selected is not None else "-"
+        if self._auto_detection_available:
+            auto_text = "开" if self._auto_detection_enabled else "关"
+        else:
+            auto_text = "不可用"
+        self.query_one("#status", Static).update(
+            f"最近刷新: {refresh_text} | 当前服务: {selected_text} | 自动检测: {auto_text} | c 手动检测 | a 切换自动"
+        )
+
 
 def build_node_scores(
     nodes: list[str],
@@ -400,14 +515,18 @@ def build_node_scores(
     scored_nodes = []
     disabled_node_names = disabled_node_names or set()
     for node in nodes:
-        if node in disabled_node_names:
-            continue
         record = storage.get_node_service_record(node, service_name, proxy_group_name)
-        scored_nodes.append(_node_score_from_record(node, record))
+        scored_nodes.append(
+            _node_score_from_record(
+                node,
+                record,
+                disabled=node in disabled_node_names,
+            )
+        )
 
     return sorted(
         scored_nodes,
-        key=lambda node: (-node.score, node.name != current_node, node.name),
+        key=lambda node: (node.disabled, -node.score, node.name != current_node, node.name),
     )
 
 
@@ -430,12 +549,30 @@ def build_connection_rows(
     return rows[:limit]
 
 
+def _node_table_signature(
+    nodes: list[NodeScore],
+    current_node: Optional[str],
+) -> tuple[tuple[str, str, str, bool, bool], ...]:
+    return tuple(
+        (
+            node.name,
+            f"{node.score:.3f}",
+            f"{node.success_rate:.0%}" if node.total_checks else "-",
+            node.name == current_node,
+            node.disabled,
+        )
+        for node in nodes
+    )
+
+
 def _node_score_from_record(
     node: str,
     record: Optional[ServiceRecord],
+    *,
+    disabled: bool = False,
 ) -> NodeScore:
     if record is None:
-        return NodeScore(name=node)
+        return NodeScore(name=node, disabled=disabled)
 
     return NodeScore(
         name=node,
@@ -443,6 +580,7 @@ def _node_score_from_record(
         status=record.status,
         total_checks=record.total_checks,
         successful_checks=record.successful_checks,
+        disabled=disabled,
     )
 
 

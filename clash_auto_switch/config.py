@@ -118,3 +118,26 @@ def disable_node_for_task(config: AppConfig, task: ProxyServicePair, node_name: 
             )
         )
     return save_app_config(config)
+
+
+def toggle_node_disabled_for_task(config: AppConfig, task: ProxyServicePair, node_name: str) -> bool:
+    """Toggle one node's disabled state for a task and persist the config."""
+    before_count = len(config.disabled_nodes)
+    config.disabled_nodes = [
+        node
+        for node in config.disabled_nodes
+        if not (
+            node.proxy_group_name == task.proxy_group_name
+            and node.service_name == task.service_name
+            and node.node_name == node_name
+        )
+    ]
+    if len(config.disabled_nodes) == before_count:
+        config.disabled_nodes.append(
+            DisabledNode(
+                proxy_group_name=task.proxy_group_name,
+                service_name=task.service_name,
+                node_name=node_name,
+            )
+        )
+    return save_app_config(config)

@@ -5,7 +5,7 @@ import httpx
 
 from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair
-from clash_auto_switch.core.service_tester import probe_service
+from clash_auto_switch.core.service_tester import probe_service, service_debug_event_handler
 from clash_auto_switch.core.storage import NodeHistoryStorage
 
 
@@ -171,7 +171,8 @@ async def probe_current_node_and_switch_if_unavailable(
         pass
 
     try:
-        ok, status_text = await probe_func(service_name, clash_config.http_proxy)
+        with service_debug_event_handler(event_handler):
+            ok, status_text = await probe_func(service_name, clash_config.http_proxy)
     except Exception as e:
         ok, status_text = False, f"检测异常: {e}"
 
