@@ -217,17 +217,7 @@ auto 模式会把更细的诊断事件写到数据目录下的 `diagnostics.json
 - `prime_video`
 - `emby_as174`
 
-常用别名：
-
-- ChatGPT: `chatgpt`, `openai`
-- Claude: `claude`, `anthropic`
-- Gemini: `gemini`
-- YouTube Premium: `youtube_premium`, `youtube`
-- YouTube Music: `youtube_music`, `youtube-music`, `youtubemusic`, `ytmusic`
-- Disney+: `disney_plus`, `disney+`, `disney`
-- Prime Video: `prime_video`, `prime`, `amazon_prime`
-- Emby AS174: `emby_as174`, `emby`, `as174_emby`
-- Bahamut Anime: `bahamut_anime`, `bahamut`
+`service_name` 必须严格使用上面的服务键名，不再支持别名。
 
 哔哩哔哩相关检测代码保留在代码中，但默认未注册启用。
 

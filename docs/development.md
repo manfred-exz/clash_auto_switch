@@ -104,9 +104,10 @@ Node history belongs in `NodeHistoryStorage`; user policy belongs in config.
 ## Adding a Service Checker
 
 1. Add an async checker in `core/service_tester.py` returning `TestResultItem`.
-2. Add aliases to `SERVICE_ALIASES`.
-3. Register the checker in `SERVICE_CHECKERS`.
-4. For auto mode, add trigger host patterns in `core/service_hosts.py`.
+2. Register the checker in `SERVICE_CHECKERS`.
+3. For auto mode, add trigger host patterns in `core/service_hosts.py`.
+
+`service_name` values are strict keys. Do not add aliases.
 
 Keep checkers conservative: return `Yes` only when the service is actually usable.
 

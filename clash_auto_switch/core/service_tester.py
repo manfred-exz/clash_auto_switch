@@ -1046,36 +1046,6 @@ async def check_emby_as174(proxy: Optional[str] = None) -> TestResultItem:
 
 ServiceChecker = Callable[[Optional[str]], Awaitable[TestResultItem]]
 
-SERVICE_ALIASES = {
-    "bilibili_cn": "bilibili_mainland",
-    "bilibili_mainland": "bilibili_mainland",
-    "bilibili_hk": "bilibili_hk_mc_tw",
-    "bilibili_hk_mc_tw": "bilibili_hk_mc_tw",
-    "chatgpt": "chatgpt",
-    "openai": "chatgpt",
-    "claude": "claude",
-    "anthropic": "claude",
-    "gemini": "gemini",
-    "youtube": "youtube_premium",
-    "youtube_premium": "youtube_premium",
-    "youtube_music": "youtube_music",
-    "youtubemusic": "youtube_music",
-    "youtube-music": "youtube_music",
-    "ytmusic": "youtube_music",
-    "bahamut": "bahamut_anime",
-    "bahamut_anime": "bahamut_anime",
-    "netflix": "netflix",
-    "disney": "disney_plus",
-    "disney+": "disney_plus",
-    "disney_plus": "disney_plus",
-    "prime": "prime_video",
-    "prime_video": "prime_video",
-    "amazon_prime": "prime_video",
-    "emby": "emby_as174",
-    "emby_as174": "emby_as174",
-    "as174_emby": "emby_as174",
-}
-
 SERVICE_CHECKERS: Dict[str, ServiceChecker] = {
     # "bilibili_mainland": check_bilibili_china_mainland,
     # "bilibili_hk_mc_tw": check_bilibili_hk_mc_tw,
@@ -1091,12 +1061,6 @@ SERVICE_CHECKERS: Dict[str, ServiceChecker] = {
     "emby_as174": check_emby_as174,
 }
 
-
-def normalize_service_name(service_name: str) -> str:
-    key = service_name.strip().lower().replace(" ", "_")
-    return SERVICE_ALIASES.get(key, key)
-
-
 async def probe_service(
     service_name: str,
     proxy_url: Optional[str],
@@ -1106,9 +1070,7 @@ async def probe_service(
     The service is considered unlocked only when status == "Yes".
     """
 
-    norm = normalize_service_name(service_name)
-
-    checker = SERVICE_CHECKERS.get(norm)
+    checker = SERVICE_CHECKERS.get(service_name)
     if checker:
         result = await checker(proxy_url)
         return result.status == "Yes", format_result_status(result)
@@ -1153,8 +1115,7 @@ async def main(proxy: Optional[str], service: Optional[str] = None, debug: bool 
         return
 
     if service:
-        norm = normalize_service_name(service)
-        checker = SERVICE_CHECKERS.get(norm)
+        checker = SERVICE_CHECKERS.get(service)
         if checker is None:
             raise SystemExit(f"unknown service: {service}")
         result = await checker(proxy)

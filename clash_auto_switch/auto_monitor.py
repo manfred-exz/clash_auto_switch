@@ -14,7 +14,6 @@ from clash_auto_switch.core.notifier import notify_user
 from clash_auto_switch.core.proxy_switcher import switch_proxy_group_and_verify, switch_until_service_available
 from clash_auto_switch.core.service_hosts import SERVICE_HOST_PATTERNS
 from clash_auto_switch.core.service_tester import (
-    normalize_service_name,
     probe_service,
     service_debug_event_handler,
 )
@@ -90,7 +89,7 @@ class AutoMonitorRunner:
 
     def _watched_tasks(self) -> list[ProxyServicePair]:
         tasks_by_service = {
-            normalize_service_name(task.service_name): task
+            task.service_name: task
             for task in self.enabled_tasks
         }
         watched_services = sorted(set(tasks_by_service) & set(SERVICE_HOST_PATTERNS))
@@ -99,7 +98,7 @@ class AutoMonitorRunner:
     @property
     def tasks_by_service(self) -> dict[str, ProxyServicePair]:
         return {
-            normalize_service_name(task.service_name): task
+            task.service_name: task
             for task in self.watched_tasks
         }
 
@@ -188,7 +187,7 @@ class AutoMonitorRunner:
         )
 
     async def check_service(self, task: ProxyServicePair) -> None:
-        service_name = normalize_service_name(task.service_name)
+        service_name = task.service_name
         running_task = self.running_checks.get(service_name)
         if running_task and not running_task.done():
             self.event(task.service_name, "手动检测已跳过 | 自动检测仍在运行")
@@ -269,7 +268,7 @@ class AutoMonitorRunner:
 
     async def switch_node(self, task: ProxyServicePair, node_name: str) -> None:
         assert self.clash is not None
-        service_name = normalize_service_name(task.service_name)
+        service_name = task.service_name
         running_task = self.running_checks.get(service_name)
         if running_task and not running_task.done():
             self.event(task.service_name, "手动切换已跳过 | 自动检测仍在运行")

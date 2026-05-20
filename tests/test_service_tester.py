@@ -5,7 +5,6 @@ from clash_auto_switch.core.service_tester import (
     SERVICE_CHECKERS,
     extract_youtube_music_api_config,
     extract_youtube_music_visitor_data,
-    normalize_service_name,
     parse_emby_public_server_info,
     parse_youtube_music_api_response,
     parse_youtube_premium_page,
@@ -75,11 +74,6 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertEqual(status, "No")
         self.assertIsNone(region)
 
-    def test_youtube_music_aliases(self) -> None:
-        self.assertEqual(normalize_service_name("YoutubeMusic"), "youtube_music")
-        self.assertEqual(normalize_service_name("youtube-music"), "youtube_music")
-        self.assertEqual(normalize_service_name("ytmusic"), "youtube_music")
-
     def test_service_checker_registration_defaults(self) -> None:
         self.assertIn("chatgpt", SERVICE_CHECKERS)
         self.assertIn("claude", SERVICE_CHECKERS)
@@ -88,7 +82,6 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertNotIn("bilibili_hk_mc_tw", SERVICE_CHECKERS)
 
     def test_claude_aliases_and_blocked_codes(self) -> None:
-        self.assertEqual(normalize_service_name("anthropic"), "claude")
         self.assertIn("CN", CLAUDE_BLOCKED_CODES)
         self.assertIn("HK", CLAUDE_BLOCKED_CODES)
 
