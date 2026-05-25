@@ -48,7 +48,6 @@ async def check_gemini(proxy: Optional[str] = None) -> TestResultItem:
 
 class GeminiChecker(ServiceChecker):
     service_name = "gemini"
-    display_name = "Gemini"
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("gemini.google.com",),
         extra_connection_hosts=("gemini.google.com", "google.com", "gstatic.com"),

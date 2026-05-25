@@ -4,7 +4,11 @@ from typing import Optional
 
 import httpx
 
-from clash_auto_switch.config import disabled_node_names_for_task, toggle_node_disabled_for_task
+from clash_auto_switch.config import (
+    add_task_to_config,
+    disabled_node_names_for_task,
+    toggle_node_disabled_for_task,
+)
 from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler, format_interval
 from clash_auto_switch.core.clash_api import ClashClient, ClashLogEntry
 from clash_auto_switch.core.clash_state import ClashProxyState
@@ -19,7 +23,7 @@ from clash_auto_switch.core.proxy_switcher import (
 from clash_auto_switch.core.services.probe import (
     probe_service,
 )
-from clash_auto_switch.core.services.registry import SERVICE_HOST_PATTERNS
+from clash_auto_switch.core.services.registry import SERVICE_CHECKERS, SERVICE_HOST_PATTERNS
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
 from clash_auto_switch.tui import MonitorTui
@@ -67,21 +71,22 @@ class AutoMonitorRunner:
 
     async def run(self) -> None:
         self.storage.startup_cleanup()
-        if not self.watched_tasks:
-            print("没有可自动触发的启用任务。")
-            return
-
         self.tui.configure_callbacks(
             self.switch_node,
             self.disable_node,
             self.toggle_auto_detection,
             self.check_service,
+            self.add_task,
         )
         async with ClashClient.from_external_controller(
             self.config.clash.controller,
             secret=self.config.clash.secret,
         ) as client:
             self.clash = ClashProxyState(client)
+            self.tui.set_add_task_options(
+                proxy_groups=await self.clash.list_proxy_group_names(),
+                services=self.addable_service_names(),
+            )
             self.event("system", f"启动 auto 模式 | 监听 {len(self.watched_tasks)} 个服务")
             self.event("system", f"诊断日志: {self.diagnostics.path}")
             for task in self.watched_tasks:
@@ -107,6 +112,14 @@ class AutoMonitorRunner:
             task.service_name: task
             for task in self.watched_tasks
         }
+
+    def addable_service_names(self) -> list[str]:
+        configured = {task.service_name for task in self.watched_tasks}
+        return sorted(
+            service_name
+            for service_name in SERVICE_CHECKERS
+            if service_name in SERVICE_HOST_PATTERNS and service_name not in configured
+        )
 
     async def run_background_tasks(self) -> None:
         tasks = [
@@ -272,6 +285,34 @@ class AutoMonitorRunner:
             proxy_group_name=task.proxy_group_name,
             enabled=enabled,
         )
+
+    async def add_task(self, proxy_group_name: str, service_name: str) -> Optional[ProxyServicePair]:
+        if service_name not in SERVICE_CHECKERS or service_name not in SERVICE_HOST_PATTERNS:
+            self.event("system", f"未知或不可自动触发的服务: {service_name}")
+            return None
+        if any(task.service_name == service_name for task in self.watched_tasks):
+            self.event(service_name, "添加任务已跳过 | 服务已存在")
+            return None
+
+        task = ProxyServicePair(proxy_group_name, service_name, enabled=True)
+        if not add_task_to_config(self.config, task):
+            self.event(service_name, "添加任务失败 | 配置保存失败")
+            return None
+
+        self.enabled_tasks.append(task)
+        self.watched_tasks.append(task)
+        self.watched_tasks.sort(key=lambda item: item.service_name)
+        self.auto_detection_enabled[task.service_name] = True
+        self.tui.set_add_task_options(services=self.addable_service_names())
+        self.tui.set_auto_detection_enabled(task, True)
+        self.diagnostics.write(
+            "task_added",
+            service_name=task.service_name,
+            proxy_group_name=task.proxy_group_name,
+        )
+        await self.update_tui_service(task)
+        await self.update_tui_connections_if_selected()
+        return task
 
     async def switch_node(self, task: ProxyServicePair, node_name: str) -> None:
         assert self.clash is not None

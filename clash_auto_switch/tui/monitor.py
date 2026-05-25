@@ -10,7 +10,8 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, RichLog, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, RichLog, Select, Static
 
 from clash_auto_switch.core.clash_state import ProxyGroupState
 from clash_auto_switch.core.connections import connection_matches_service
@@ -22,6 +23,7 @@ SwitchNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 DisableNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 ToggleAutoDetectionFunc = Callable[[ProxyServicePair, bool], Awaitable[None]]
 CheckServiceFunc = Callable[[ProxyServicePair], Awaitable[None]]
+AddTaskFunc = Callable[[str, str], Awaitable[Optional[ProxyServicePair]]]
 
 MAX_CONNECTION_ROWS = 12
 
@@ -63,6 +65,68 @@ class ServiceView:
     connection_status: str = "等待读取连接"
     rendered_node_signature: tuple[tuple[str, str, str, bool, bool], ...] = ()
     auto_detection_enabled: bool = True
+
+
+class AddTaskDialog(ModalScreen[Optional[tuple[str, str]]]):
+    """Modal dialog for adding a configured service task."""
+
+    CSS = """
+    AddTaskDialog {
+        align: center middle;
+    }
+
+    #add-task-dialog {
+        width: 60;
+        height: auto;
+        border: round cyan;
+        padding: 1 2;
+        background: $surface;
+    }
+
+    #add-task-dialog Select {
+        margin-bottom: 1;
+    }
+
+    #add-task-actions {
+        height: auto;
+        align-horizontal: right;
+    }
+    """
+
+    def __init__(self, proxy_groups: list[str], services: list[str]) -> None:
+        super().__init__()
+        self.proxy_groups = proxy_groups
+        self.services = services
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="add-task-dialog"):
+            yield Static("添加任务")
+            yield Select(
+                [(name, name) for name in self.proxy_groups],
+                prompt="ProxyGroup",
+                id="add-task-group",
+            )
+            yield Select(
+                [(name, name) for name in self.services],
+                prompt="Service",
+                id="add-task-service",
+            )
+            with Horizontal(id="add-task-actions"):
+                yield Button("取消", id="add-task-cancel")
+                yield Button("添加", id="add-task-confirm", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "add-task-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id != "add-task-confirm":
+            return
+
+        group_value = self.query_one("#add-task-group", Select).value
+        service_value = self.query_one("#add-task-service", Select).value
+        if group_value == Select.BLANK or service_value == Select.BLANK:
+            return
+        self.dismiss((str(group_value), str(service_value)))
 
 
 class MonitorTui(App[None]):
@@ -139,10 +203,18 @@ class MonitorTui(App[None]):
         Binding("e", "toggle_events", "事件"),
         Binding("a", "toggle_auto_detection", "自动"),
         Binding("c", "check_service", "检测"),
+        Binding("t", "add_task", "添加"),
         Binding("q", "quit", "退出"),
     ]
 
-    def __init__(self, tasks: list[ProxyServicePair], *, max_events: int = 500) -> None:
+    def __init__(
+        self,
+        tasks: list[ProxyServicePair],
+        *,
+        max_events: int = 500,
+        available_proxy_groups: list[str] | None = None,
+        available_services: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self._service_order = [task.service_name for task in tasks]
         self._services = {task.service_name: ServiceView(task=task) for task in tasks}
@@ -152,11 +224,14 @@ class MonitorTui(App[None]):
         self._disable_node: Optional[DisableNodeFunc] = None
         self._toggle_auto_detection: Optional[ToggleAutoDetectionFunc] = None
         self._check_service: Optional[CheckServiceFunc] = None
+        self._add_task: Optional[AddTaskFunc] = None
         self._auto_detection_available = False
         self._service_table_ids = {
             task.service_name: f"service-{index}"
             for index, task in enumerate(tasks)
         }
+        self._available_proxy_groups = list(available_proxy_groups or [])
+        self._available_services = list(available_services or [])
         self._ui_ready = False
         self._events_maximized = False
         self._last_refresh_time: Optional[datetime] = None
@@ -194,13 +269,26 @@ class MonitorTui(App[None]):
         disable_node: Optional[DisableNodeFunc] = None,
         toggle_auto_detection: Optional[ToggleAutoDetectionFunc] = None,
         check_service: Optional[CheckServiceFunc] = None,
+        add_task: Optional[AddTaskFunc] = None,
     ) -> None:
         self._switch_node = switch_node
         self._disable_node = disable_node
         self._toggle_auto_detection = toggle_auto_detection
         self._check_service = check_service
+        self._add_task = add_task
         self._auto_detection_available = toggle_auto_detection is not None
         self._render_status()
+
+    def set_add_task_options(
+        self,
+        *,
+        proxy_groups: list[str] | None = None,
+        services: list[str] | None = None,
+    ) -> None:
+        if proxy_groups is not None:
+            self._available_proxy_groups = list(proxy_groups)
+        if services is not None:
+            self._available_services = list(services)
 
     def event(self, service_name: str, message: str, *, level: str = "info") -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -274,6 +362,26 @@ class MonitorTui(App[None]):
         if service is not None:
             service.auto_detection_enabled = enabled
         self._render_status()
+
+    async def add_task_view(self, task: ProxyServicePair) -> None:
+        if task.service_name in self._services:
+            return
+        self._service_order.append(task.service_name)
+        self._services[task.service_name] = ServiceView(task=task)
+        self._service_table_ids[task.service_name] = f"service-{len(self._service_table_ids)}"
+        if self._selected_service_index is None:
+            self._selected_service_index = 0
+
+        if self._ui_ready:
+            table = DataTable(
+                id=self._service_table_ids[task.service_name],
+                classes="service-table",
+            )
+            table.add_columns("节点", "得分", "成功率")
+            table.cursor_type = "row"
+            table.zebra_stripes = True
+            await self.query_one("#services").mount(table)
+            self._render_all()
 
     def selected_node(self) -> Optional[tuple[ProxyServicePair, str]]:
         service = self._selected_service()
@@ -385,6 +493,37 @@ class MonitorTui(App[None]):
             await self._check_service(task)
         except Exception as exc:
             self.event(task.service_name, f"手动检测失败 | {exc}")
+
+    def action_add_task(self) -> None:
+        if self._add_task is None:
+            self.event("system", "当前模式不支持添加任务")
+            return
+        if not self._available_proxy_groups:
+            self.event("system", "没有可添加的 ProxyGroup")
+            return
+        if not self._available_services:
+            self.event("system", "没有可添加的服务")
+            return
+
+        self.push_screen(
+            AddTaskDialog(self._available_proxy_groups, self._available_services),
+            callback=self._handle_add_task_selection,
+        )
+
+    async def _handle_add_task_selection(self, selected: Optional[tuple[str, str]]) -> None:
+        if selected is None:
+            return
+
+        proxy_group_name, service_name = selected
+        try:
+            task = await self._add_task(proxy_group_name, service_name)
+        except Exception as exc:
+            self.event("system", f"添加任务失败 | {exc}")
+            return
+        if task is None:
+            return
+        await self.add_task_view(task)
+        self.event(task.service_name, f"添加任务 | {task.proxy_group_name}")
 
     def _move_service(self, delta: int) -> None:
         if not self._service_order:
@@ -507,7 +646,7 @@ class MonitorTui(App[None]):
         else:
             auto_text = "不可用"
         self.query_one("#status", Static).update(
-            f"最近刷新: {refresh_text} | 当前服务: {selected_text} | 自动检测: {auto_text} | c 手动检测 | a 切换自动"
+            f"最近刷新: {refresh_text} | 当前服务: {selected_text} | 自动检测: {auto_text} | c 手动检测 | a 切换自动 | t 添加任务"
         )
 
 

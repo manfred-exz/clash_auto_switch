@@ -41,7 +41,6 @@ async def check_prime_video(proxy: Optional[str] = None) -> TestResultItem:
 
 class PrimeVideoChecker(ServiceChecker):
     service_name = "prime_video"
-    display_name = "Prime Video"
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("primevideo.com", "amazonvideo.com"),
         extra_connection_hosts=("primevideo.com", "amazonvideo.com", "media-amazon.com"),

@@ -74,7 +74,6 @@ async def check_youtube_premium(proxy: Optional[str] = None) -> TestResultItem:
 
 class YouTubePremiumChecker(ServiceChecker):
     service_name = "youtube_premium"
-    display_name = "Youtube Premium"
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("youtube.com", "googlevideo.com", "ytimg.com"),
         extra_connection_hosts=("youtube.com", "googlevideo.com", "ytimg.com"),

@@ -484,7 +484,6 @@ async def debug_youtube_music(proxy: Optional[str] = None) -> None:
 
 class YouTubeMusicChecker(ServiceChecker):
     service_name = "youtube_music"
-    display_name = "Youtube Music"
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("music.youtube.com", "youtubei.googleapis.com"),
         extra_connection_hosts=(

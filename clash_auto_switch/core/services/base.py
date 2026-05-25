@@ -27,7 +27,6 @@ class ServiceChecker(ABC):
     """Base class for one service availability checker."""
 
     service_name: str
-    display_name: str
     host_patterns: ServiceHostPatterns | None = None
 
     @abstractmethod

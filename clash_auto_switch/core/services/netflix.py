@@ -80,7 +80,6 @@ async def check_netflix(proxy: Optional[str] = None) -> TestResultItem:
 
 class NetflixChecker(ServiceChecker):
     service_name = "netflix"
-    display_name = "Netflix"
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("netflix.com", "nflxvideo.net", "fast.com"),
         extra_connection_hosts=("netflix.com", "nflxvideo.net", "nflximg.net", "fast.com"),

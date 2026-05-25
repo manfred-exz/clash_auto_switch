@@ -243,6 +243,39 @@ class MonitorTuiTextualTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(checked, [ai])
 
+    async def test_add_task_view_mounts_new_service_table(self) -> None:
+        youtube = ProxyServicePair("Youtube", "youtube_music")
+        gemini = ProxyServicePair("AI", "gemini")
+        app = MonitorTui([youtube])
+
+        async with app.run_test() as pilot:
+            await app.add_task_view(gemini)
+            self.assertEqual(app.selected_task(), youtube)
+            self.assertIsNotNone(pilot.app.query_one("#service-1", DataTable))
+
+        self.assertIn("gemini", app._services)
+
+    async def test_add_task_binding_opens_dialog(self) -> None:
+        app = MonitorTui(
+            [],
+            available_proxy_groups=["Youtube"],
+            available_services=["youtube_music"],
+        )
+
+        async def add_task(proxy_group_name: str, service_name: str) -> ProxyServicePair:
+            return ProxyServicePair(proxy_group_name, service_name)
+
+        app.configure_callbacks(lambda _task, _node: None, add_task=add_task)
+
+        async with app.run_test() as pilot:
+            await pilot.press("t")
+            await pilot.pause()
+            self.assertEqual(len(pilot.app.screen_stack), 2)
+            pilot.app.screen.dismiss(("Youtube", "youtube_music"))
+            await pilot.pause()
+
+        self.assertIn("youtube_music", app._services)
+
     async def test_event_text_with_brackets_is_rendered_as_plain_text(self) -> None:
         task = ProxyServicePair("Youtube", "youtube_music")
         app = MonitorTui([task])

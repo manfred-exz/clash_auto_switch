@@ -97,6 +97,18 @@ def save_app_config(config: AppConfig) -> bool:
     return save_config(dump_config_data(config))
 
 
+def add_task_to_config(config: AppConfig, task: ProxyServicePair) -> bool:
+    """Add one enabled monitoring task and persist the config."""
+    if any(
+        existing.proxy_group_name == task.proxy_group_name
+        and existing.service_name == task.service_name
+        for existing in config.tasks
+    ):
+        return True
+    config.tasks.append(task)
+    return save_app_config(config)
+
+
 def disabled_node_names_for_task(config: AppConfig, task: ProxyServicePair) -> set[str]:
     """Return disabled node names for a task."""
     return {

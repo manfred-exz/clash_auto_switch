@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from clash_auto_switch.config import (
+    add_task_to_config,
     disable_node_for_task,
     disabled_node_names_for_task,
     dump_config_data,
@@ -68,6 +69,17 @@ class ConfigTest(unittest.TestCase):
 
             self.assertTrue(toggle_node_disabled_for_task(config, task, "node-a"))
             self.assertEqual(disabled_node_names_for_task(config, task), set())
+
+    def test_add_task_to_config_updates_and_persists_config(self) -> None:
+        config = AppConfig(ClashConfig(), MonitoringConfig(), [])
+        task = ProxyServicePair("Youtube", "youtube_music")
+
+        with patch("clash_auto_switch.config.save_config", return_value=True) as save:
+            self.assertTrue(add_task_to_config(config, task))
+
+        self.assertEqual(config.tasks, [task])
+        saved_data = save.call_args.args[0]
+        self.assertEqual(saved_data["tasks"][0]["service_name"], "youtube_music")
 
 
 if __name__ == "__main__":

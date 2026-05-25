@@ -57,7 +57,6 @@ async def check_bahamut_anime(proxy: Optional[str] = None) -> TestResultItem:
 
 class BahamutAnimeChecker(ServiceChecker):
     service_name = "bahamut_anime"
-    display_name = "Bahamut Anime"
     host_patterns = ServiceHostPatterns(trigger_hosts=("ani.gamer.com.tw", "gamer.com.tw"))
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

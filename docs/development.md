@@ -93,7 +93,7 @@ Node history belongs in `NodeHistoryStorage`; user policy belongs in config.
 ## Adding a Service Checker
 
 1. Add a module in `core/services/<service_name>.py`.
-2. Implement a `ServiceChecker` subclass with strict `service_name` and `display_name` values.
+2. Implement a `ServiceChecker` subclass with a strict `service_name` value.
 3. Add `host_patterns = ServiceHostPatterns(...)` on the checker class if the service should support auto trigger, connection display, or connection cleanup.
 4. Keep service-specific parsing helpers and HTTP checks in that same service module. Only genuinely shared primitives belong in `core/services/common.py`.
 

@@ -64,6 +64,15 @@ class ClashProxyState:
             raw=proxy,
         )
 
+    async def list_proxy_group_names(self) -> list[str]:
+        await self._ensure_fresh()
+        groups = [
+            name
+            for name, proxy in self._proxies.items()
+            if isinstance(proxy.get("all"), list)
+        ]
+        return sorted(groups)
+
     async def select_proxy(self, selector_name: str, proxy_name: str) -> None:
         await self._client.select_proxy(selector_name, proxy_name)
         self.invalidate()
