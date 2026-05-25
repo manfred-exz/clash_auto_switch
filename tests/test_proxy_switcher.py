@@ -3,6 +3,7 @@ import unittest
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair, ServiceRecord
 from clash_auto_switch.core.proxy_switcher import (
     list_alive_proxy_candidates,
+    probe_current_node_and_switch_if_unavailable,
     switch_to_next_ranked_proxy,
     switch_until_service_available,
 )
@@ -16,6 +17,9 @@ from clash_auto_switch.tui.monitor import (
 
 
 class FakeStorage:
+    def __init__(self) -> None:
+        self.records = []
+
     def get_records_by_node(self, _node: str, _proxy_group: str) -> list:
         return []
 
@@ -34,7 +38,7 @@ class FakeStorage:
         proxy_group: str,
         is_available: bool,
     ) -> None:
-        pass
+        self.records.append((node_name, service_name, proxy_group, is_available))
 
 class FakeScoreStorage:
     def __init__(self) -> None:
@@ -187,6 +191,9 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         async def probe(_service_name: str, _proxy_url: str | None) -> tuple[bool, str]:
             return next(probe_results)
 
+        async def connectivity(_proxy_url: str | None) -> tuple[bool, str]:
+            return True, "ok"
+
         async def after_switch(node_name: str) -> None:
             switched_nodes.append(node_name)
 
@@ -196,6 +203,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
             ClashConfig(),
             FakeStorage(),
             probe_func=probe,
+            connectivity_func=connectivity,
             after_switch=after_switch,
         )
 
@@ -203,6 +211,33 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.switched)
         self.assertEqual(result.attempts, 2)
         self.assertEqual(switched_nodes, ["node-b"])
+
+    async def test_connectivity_failure_switches_without_recording_score(self) -> None:
+        client = StatefulFakeClashClient()
+        storage = FakeStorage()
+        probes = []
+
+        async def probe(_service_name: str, _proxy_url: str | None) -> tuple[bool, str]:
+            probes.append("called")
+            return True, "Yes"
+
+        async def connectivity(_proxy_url: str | None) -> tuple[bool, str]:
+            return False, "Cloudflare connectivity failed"
+
+        ok, switched = await probe_current_node_and_switch_if_unavailable(
+            client,
+            ProxyServicePair("Group", "youtube_music"),
+            ClashConfig(),
+            storage,
+            probe_func=probe,
+            connectivity_func=connectivity,
+        )
+
+        self.assertFalse(ok)
+        self.assertTrue(switched)
+        self.assertEqual(client.current, "node-b")
+        self.assertEqual(storage.records, [])
+        self.assertEqual(probes, [])
 
     async def test_select_next_proxy_fails_when_verification_mismatches(self) -> None:
         client = FakeClashClient(verified_now="node-a")

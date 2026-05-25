@@ -11,11 +11,14 @@ from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.core.connections import close_task_service_connections_best_effort
 from clash_auto_switch.core.diagnostic_log import DiagnosticLogger
 from clash_auto_switch.core.notifier import notify_user
-from clash_auto_switch.core.proxy_switcher import switch_proxy_group_and_verify, switch_until_service_available
+from clash_auto_switch.core.proxy_switcher import (
+    probe_current_node_once,
+    switch_proxy_group_and_verify,
+    switch_until_service_available,
+)
 from clash_auto_switch.core.service_hosts import SERVICE_HOST_PATTERNS
 from clash_auto_switch.core.service_tester import (
     probe_service,
-    service_debug_event_handler,
 )
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
@@ -57,7 +60,9 @@ class AutoMonitorRunner:
         self.clash: ClashProxyState | None = None
         self.running_checks: dict[str, asyncio.Task] = {}
         self.diagnostics = DiagnosticLogger()
-        self.auto_detection_enabled = True
+        self.auto_detection_enabled: dict[str, bool] = {
+            task.service_name: True for task in (self.watched_tasks or self.enabled_tasks)
+        }
         self.check_scheduler = AdaptiveCheckScheduler()
 
     async def run(self) -> None:
@@ -79,7 +84,8 @@ class AutoMonitorRunner:
             self.clash = ClashProxyState(client)
             self.event("system", f"启动 auto 模式 | 监听 {len(self.watched_tasks)} 个服务")
             self.event("system", f"诊断日志: {self.diagnostics.path}")
-            self.tui.set_auto_detection_enabled(self.auto_detection_enabled)
+            for task in self.watched_tasks:
+                self.tui.set_auto_detection_enabled(task, self.auto_detection_enabled.get(task.service_name, True))
             await self.refresh_all_services()
             await self.run_background_tasks()
 
@@ -136,12 +142,12 @@ class AutoMonitorRunner:
             await asyncio.sleep(LOG_RECONNECT_DELAY_SEC)
 
     async def handle_log_entry(self, log_entry: ClashLogEntry) -> None:
-        if not self.auto_detection_enabled:
-            return
-
         service_name = match_auto_trigger_service(log_entry)
         task = self.tasks_by_service.get(service_name or "")
         if service_name is None or task is None:
+            return
+
+        if not self.auto_detection_enabled.get(task.service_name, True):
             return
 
         running_task = self.running_checks.get(service_name)
@@ -255,14 +261,15 @@ class AutoMonitorRunner:
         if result.switched:
             notify_user("Clash Auto Switch", f"{task.service_name} 不可用，已切换 {task.proxy_group_name}")
 
-    async def toggle_auto_detection(self, enabled: bool) -> None:
-        self.auto_detection_enabled = enabled
-        self.tui.set_auto_detection_enabled(enabled)
+    async def toggle_auto_detection(self, task: ProxyServicePair, enabled: bool) -> None:
+        self.auto_detection_enabled[task.service_name] = enabled
+        self.tui.set_auto_detection_enabled(task, enabled)
         status = "开启" if enabled else "关闭"
-        self.event("system", f"{status}自动检测与自动切换")
+        self.event(task.service_name, f"{status}自动检测与自动切换")
         self.diagnostics.write(
             "auto_detection_toggled",
-            service_name="system",
+            service_name=task.service_name,
+            proxy_group_name=task.proxy_group_name,
             enabled=enabled,
         )
 
@@ -285,9 +292,16 @@ class AutoMonitorRunner:
         self.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
         await close_task_service_connections_best_effort(self.clash, task, self.event)
 
-        with service_debug_event_handler(self.event):
-            ok, status_text = await probe_service(task.service_name, self.config.clash.http_proxy)
-        self.storage.record_node_status(node_name, task.service_name, task.proxy_group_name, ok)
+        probe_result = await probe_current_node_once(
+            self.clash,
+            task,
+            self.config.clash,
+            self.storage,
+            probe_func=probe_service,
+            event_handler=self.event,
+        )
+        ok = probe_result.ok
+        status_text = probe_result.status_text
         schedule = self.check_scheduler.record_result(service_name, ok)
         status = "服务可用" if ok else "服务不可用"
         self.event(task.service_name, f"{status} | {status_text} | 节点: {node_name}")

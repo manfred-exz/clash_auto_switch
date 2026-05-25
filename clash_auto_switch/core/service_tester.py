@@ -86,6 +86,18 @@ def format_result_status(result: TestResultItem) -> str:
     return f"{result.name}: {result.status}{region}"
 
 
+async def check_proxy_connectivity(proxy: Optional[str] = None) -> tuple[bool, str]:
+    """Check basic node connectivity before a service-specific probe."""
+    async with create_http_client(proxy) as client:
+        try:
+            response = await client.get("https://cp.cloudflare.com/generate_204")
+            if response.status_code in {204, 200}:
+                return True, f"Cloudflare connectivity: HTTP {response.status_code}"
+            return False, f"Cloudflare connectivity failed: HTTP {response.status_code}"
+        except httpx.RequestError as exc:
+            return False, f"Cloudflare connectivity failed: {str(exc)[:80]}"
+
+
 def parse_trace_country(body: str) -> Optional[str]:
     for line in body.splitlines():
         if line.startswith("loc="):

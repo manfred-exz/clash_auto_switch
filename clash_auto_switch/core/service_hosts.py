@@ -80,7 +80,7 @@ SERVICE_HOST_PATTERNS: dict[str, ServiceHostPatterns] = {
         trigger_hosts=("primevideo.com", "amazonvideo.com", "media-amazon.com", "pv-cdn.net"),
     ),
     "emby_as174": ServiceHostPatterns(
-        trigger_hosts=("emby.as174.de",),
+        trigger_hosts=("emby.as174.de", "hxd.as174.de"),
     ),
 }
 

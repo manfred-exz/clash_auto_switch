@@ -20,7 +20,7 @@ from clash_auto_switch.defs import ProxyServicePair, ServiceRecord
 
 SwitchNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
 DisableNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
-ToggleAutoDetectionFunc = Callable[[bool], Awaitable[None]]
+ToggleAutoDetectionFunc = Callable[[ProxyServicePair, bool], Awaitable[None]]
 CheckServiceFunc = Callable[[ProxyServicePair], Awaitable[None]]
 
 MAX_CONNECTION_ROWS = 12
@@ -62,6 +62,7 @@ class ServiceView:
     connections: list[ConnectionRow] = field(default_factory=list)
     connection_status: str = "等待读取连接"
     rendered_node_signature: tuple[tuple[str, str, str, bool, bool], ...] = ()
+    auto_detection_enabled: bool = True
 
 
 class MonitorTui(App[None]):
@@ -152,7 +153,6 @@ class MonitorTui(App[None]):
         self._toggle_auto_detection: Optional[ToggleAutoDetectionFunc] = None
         self._check_service: Optional[CheckServiceFunc] = None
         self._auto_detection_available = False
-        self._auto_detection_enabled = True
         self._service_table_ids = {
             task.service_name: f"service-{index}"
             for index, task in enumerate(tasks)
@@ -269,8 +269,10 @@ class MonitorTui(App[None]):
         service = self._selected_service()
         return service.task if service is not None else None
 
-    def set_auto_detection_enabled(self, enabled: bool) -> None:
-        self._auto_detection_enabled = enabled
+    def set_auto_detection_enabled(self, task: ProxyServicePair, enabled: bool) -> None:
+        service = self._services.get(task.service_name)
+        if service is not None:
+            service.auto_detection_enabled = enabled
         self._render_status()
 
     def selected_node(self) -> Optional[tuple[ProxyServicePair, str]]:
@@ -355,13 +357,18 @@ class MonitorTui(App[None]):
             self.event("system", "当前模式不支持自动检测开关")
             return
 
-        next_enabled = not self._auto_detection_enabled
-        self._auto_detection_enabled = next_enabled
+        service = self._selected_service()
+        if service is None:
+            self.event("system", "没有可切换自动检测的服务")
+            return
+
+        next_enabled = not service.auto_detection_enabled
+        service.auto_detection_enabled = next_enabled
         self._render_status()
         try:
-            await self._toggle_auto_detection(next_enabled)
+            await self._toggle_auto_detection(service.task, next_enabled)
         except Exception as exc:
-            self._auto_detection_enabled = not next_enabled
+            service.auto_detection_enabled = not next_enabled
             self._render_status()
             self.event("system", f"切换自动检测失败 | {exc}")
 
@@ -495,7 +502,8 @@ class MonitorTui(App[None]):
         selected = self._selected_service()
         selected_text = selected.task.service_name if selected is not None else "-"
         if self._auto_detection_available:
-            auto_text = "开" if self._auto_detection_enabled else "关"
+            auto_enabled = selected.auto_detection_enabled if selected is not None else True
+            auto_text = "开" if auto_enabled else "关"
         else:
             auto_text = "不可用"
         self.query_one("#status", Static).update(

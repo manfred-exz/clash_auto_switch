@@ -7,15 +7,12 @@ from clash_auto_switch.core.clash_api import ClashClient
 from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.core.connections import close_task_service_connections_best_effort
 from clash_auto_switch.core.proxy_switcher import (
+    probe_current_node_once,
     probe_current_node_and_switch_if_unavailable,
     switch_proxy_group_and_verify,
     switch_until_service_available,
 )
-from clash_auto_switch.core.service_tester import (
-    probe_service,
-    probe_service_multi,
-    service_debug_event_handler,
-)
+from clash_auto_switch.core.service_tester import probe_service, probe_service_multi
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
 from clash_auto_switch.tui import MonitorTui
@@ -172,9 +169,16 @@ class PeriodicMonitorRunner:
             self.tui.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
             await close_task_service_connections_best_effort(clash, task, self.tui.event)
 
-            with service_debug_event_handler(self.tui.event):
-                ok, status_text = await probe_service(task.service_name, self.config.clash.http_proxy)
-            self.storage.record_node_status(node_name, task.service_name, task.proxy_group_name, ok)
+            probe_result = await probe_current_node_once(
+                clash,
+                task,
+                self.config.clash,
+                self.storage,
+                probe_func=probe_service,
+                event_handler=self.tui.event,
+            )
+            ok = probe_result.ok
+            status_text = probe_result.status_text
             schedule = self.check_scheduler.record_result(task.service_name, ok)
             status = "服务可用" if ok else "服务不可用"
             self.tui.event(task.service_name, f"{status} | {status_text} | 节点: {node_name}")

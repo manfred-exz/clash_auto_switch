@@ -185,8 +185,8 @@ class MonitorTuiTextualTest(unittest.IsolatedAsyncioTestCase):
         app = MonitorTui([task])
         toggles = []
 
-        async def toggle_auto_detection(enabled: bool) -> None:
-            toggles.append(enabled)
+        async def toggle_auto_detection(task_arg: ProxyServicePair, enabled: bool) -> None:
+            toggles.append((task_arg, enabled))
 
         app.configure_callbacks(
             lambda _task, _node: None,
@@ -197,8 +197,31 @@ class MonitorTuiTextualTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("a")
             status_text = str(pilot.app.query_one("#status").content)
 
-        self.assertEqual(toggles, [False])
+        self.assertEqual(toggles, [(task, False)])
         self.assertIn("自动检测: 关", status_text)
+
+    async def test_auto_detection_toggle_is_per_service(self) -> None:
+        youtube = ProxyServicePair("Youtube", "youtube_music")
+        ai = ProxyServicePair("AI", "gemini")
+        app = MonitorTui([youtube, ai])
+
+        async def toggle_auto_detection(_task: ProxyServicePair, _enabled: bool) -> None:
+            return None
+
+        app.configure_callbacks(
+            lambda _task, _node: None,
+            toggle_auto_detection=toggle_auto_detection,
+        )
+
+        async with app.run_test() as pilot:
+            await pilot.press("a")
+            self.assertFalse(app._services["youtube_music"].auto_detection_enabled)
+            self.assertTrue(app._services["gemini"].auto_detection_enabled)
+            await pilot.press("l")
+            status_text = str(pilot.app.query_one("#status").content)
+
+        self.assertIn("当前服务: gemini", status_text)
+        self.assertIn("自动检测: 开", status_text)
 
     async def test_manual_check_binding_uses_selected_service(self) -> None:
         youtube = ProxyServicePair("Youtube", "youtube_music")
