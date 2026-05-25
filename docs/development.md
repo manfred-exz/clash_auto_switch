@@ -4,7 +4,7 @@ This project is organized around three layers:
 
 - `clash_auto_switch/core/`: low-level Clash API access, cached Clash state, service probes, connection cleanup, proxy switching, and node history storage.
 - `clash_auto_switch/tui/`: terminal UI rendering and keyboard input.
-- `clash_auto_switch/auto_monitor.py` and `clash_auto_switch/monitor.py`: orchestration runners.
+- `clash_auto_switch/auto_monitor.py`: default TUI orchestration runner.
 
 The orchestration code should stay in runner classes. Avoid adding long nested functions to entry points or low-level modules.
 
@@ -39,7 +39,7 @@ async with ClashClient.from_external_controller(controller, secret=secret) as cl
 
 ### `AutoMonitorRunner`
 
-`auto_monitor.AutoMonitorRunner` drives auto mode from Clash realtime logs.
+`auto_monitor.AutoMonitorRunner` drives the default TUI from Clash realtime logs.
 
 Responsibilities:
 
@@ -50,17 +50,6 @@ Responsibilities:
 - Switch nodes through `switch_until_service_available()`.
 - Handle TUI manual switching and node disabling.
 - Refresh TUI state periodically.
-
-### `PeriodicMonitorRunner`
-
-`monitor.PeriodicMonitorRunner` runs checks on a fixed interval.
-
-Responsibilities:
-
-- Start one periodic task per enabled config task.
-- Re-check and switch until available for `run-once`.
-- Respect disabled nodes from config.
-- Handle TUI manual switching and node disabling.
 
 ## TUI Data Flow
 
@@ -103,9 +92,13 @@ Node history belongs in `NodeHistoryStorage`; user policy belongs in config.
 
 ## Adding a Service Checker
 
-1. Add an async checker in `core/service_tester.py` returning `TestResultItem`.
-2. Register the checker in `SERVICE_CHECKERS`.
-3. For auto mode, add trigger host patterns in `core/service_hosts.py`.
+1. Add a module in `core/services/<service_name>.py`.
+2. Implement a `ServiceChecker` subclass with strict `service_name` and `display_name` values.
+3. Add `host_patterns = ServiceHostPatterns(...)` on the checker class if the service should support auto trigger, connection display, or connection cleanup.
+4. Keep service-specific parsing helpers and HTTP checks in that same service module. Only genuinely shared primitives belong in `core/services/common.py`.
+
+`core/services/registry.py` discovers service modules automatically. Do not manually edit the registry for ordinary service additions.
+Service probe entry points and shared service utilities live under `core/services/`.
 
 `service_name` values are strict keys. Do not add aliases.
 
@@ -113,7 +106,7 @@ Keep checkers conservative: return `Yes` only when the service is actually usabl
 
 ## Adding Auto Trigger Hosts
 
-Add hosts to `SERVICE_HOST_PATTERNS` in `core/service_hosts.py`.
+Add `host_patterns = ServiceHostPatterns(...)` to the service checker class.
 
 Patterns are substring matches against the parsed destination host and raw log payload. Prefer specific hostnames to broad domains when two services share infrastructure, for example YouTube Premium and YouTube Music.
 
@@ -140,10 +133,9 @@ Disabled nodes are shown at the end of the TUI node list and skipped by automati
 Useful commands:
 
 ```powershell
-uv run python -m py_compile clash_auto_switch\auto_monitor.py clash_auto_switch\monitor.py clash_auto_switch\entry.py
+uv run python -m py_compile clash_auto_switch\auto_monitor.py clash_auto_switch\entry.py
 uv run python -m unittest discover -s tests
 uv run python -m clash_auto_switch --help
-uv run python -m clash_auto_switch.core.service_tester --service youtube_music --debug
 ```
 
 When debugging live switching, prefer `debug-switch` before running the TUI:

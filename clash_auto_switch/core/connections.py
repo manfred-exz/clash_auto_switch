@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from clash_auto_switch.core.clash_state import ClashProxyState
-from clash_auto_switch.core.service_hosts import connection_host_patterns
+from clash_auto_switch.core.services.registry import connection_host_patterns
 from clash_auto_switch.defs import ProxyServicePair
 
 

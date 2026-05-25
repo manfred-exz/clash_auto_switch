@@ -5,10 +5,12 @@ import httpx
 
 from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.defs import ClashConfig, ProxyServicePair
-from clash_auto_switch.core.service_tester import (
+from clash_auto_switch.core.services.common import (
     check_proxy_connectivity,
-    probe_service,
     service_debug_event_handler,
+)
+from clash_auto_switch.core.services.probe import (
+    probe_service,
 )
 from clash_auto_switch.core.storage import NodeHistoryStorage
 

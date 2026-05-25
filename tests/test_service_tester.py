@@ -1,18 +1,20 @@
 import unittest
 
-from clash_auto_switch.core.service_tester import (
-    CLAUDE_BLOCKED_CODES,
-    SERVICE_CHECKERS,
+from clash_auto_switch.core.services.claude import CLAUDE_BLOCKED_CODES
+from clash_auto_switch.core.services.common import parse_trace_country
+from clash_auto_switch.core.services.emby_as174 import parse_emby_public_server_info
+from clash_auto_switch.core.services.registry import SERVICE_CHECKERS
+from clash_auto_switch.core.services.youtube_music import (
     extract_youtube_music_api_config,
     extract_youtube_music_visitor_data,
-    parse_emby_public_server_info,
     parse_youtube_music_api_response,
-    parse_youtube_premium_page,
-    parse_trace_country,
     parse_youtube_music_page,
     parse_youtube_music_player_response,
     summarize_youtube_music_player_statuses,
 )
+from clash_auto_switch.core.services.youtube_premium import parse_youtube_premium_page
+from clash_auto_switch.core.services.base import ServiceChecker
+from clash_auto_switch.core.services.registry import EXCLUDED_MODULES, SERVICE_CLASSES
 
 
 class ServiceTesterTest(unittest.TestCase):
@@ -80,6 +82,14 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertIn("emby_as174", SERVICE_CHECKERS)
         self.assertNotIn("bilibili_mainland", SERVICE_CHECKERS)
         self.assertNotIn("bilibili_hk_mc_tw", SERVICE_CHECKERS)
+
+    def test_registered_services_are_class_based(self) -> None:
+        service_names = {checker_class.service_name for checker_class in SERVICE_CLASSES}
+
+        self.assertEqual(service_names, set(SERVICE_CHECKERS))
+        self.assertTrue(all(issubclass(checker_class, ServiceChecker) for checker_class in SERVICE_CLASSES))
+        self.assertTrue(all(checker_class.__module__.startswith("clash_auto_switch.core.services.") for checker_class in SERVICE_CLASSES))
+        self.assertIn("registry", EXCLUDED_MODULES)
 
     def test_claude_aliases_and_blocked_codes(self) -> None:
         self.assertIn("CN", CLAUDE_BLOCKED_CODES)

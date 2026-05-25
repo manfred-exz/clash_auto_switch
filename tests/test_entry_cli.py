@@ -10,10 +10,8 @@ class EntryCliTest(unittest.TestCase):
         with patch("sys.argv", ["clash-auto-switch", *args]):
             return parse_args()
 
-    def test_primary_verbs_parse_as_commands(self) -> None:
-        self.assertEqual(self.parse("auto").command, "auto")
-        self.assertEqual(self.parse("monitor").command, "monitor")
-        self.assertEqual(self.parse("run-once").command, "run-once")
+    def test_no_command_defaults_to_tui(self) -> None:
+        self.assertIsNone(self.parse().command)
 
     def test_stats_detail_parses_proxy_group_and_service(self) -> None:
         args = self.parse("stats", "Youtube", "youtube_music")
@@ -27,8 +25,9 @@ class EntryCliTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 parse_args()
 
-    def test_command_is_required(self) -> None:
-        with patch("sys.argv", ["clash-auto-switch"]), patch("sys.stderr", StringIO()):
+
+    def test_unknown_command_exits(self) -> None:
+        with patch("sys.argv", ["clash-auto-switch", "unknown"]), patch("sys.stderr", StringIO()):
             with self.assertRaises(SystemExit):
                 parse_args()
 

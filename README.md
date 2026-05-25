@@ -97,25 +97,13 @@ uv run python -m clash_auto_switch show-config
 
 ### 4. 运行
 
-周期监控模式：
+直接启动 TUI：
 
 ```powershell
-uv run python -m clash_auto_switch monitor
+uv run python -m clash_auto_switch
 ```
 
-只运行一次，直到服务切换到可用节点后退出：
-
-```powershell
-uv run python -m clash_auto_switch run-once
-```
-
-auto 模式，根据 Clash 实时日志触发检测：
-
-```powershell
-uv run python -m clash_auto_switch auto
-```
-
-auto 模式只在检测到对应服务的连接日志时触发检测。例如访问 `music.youtube.com` 时，会触发 `youtube_music` 任务。
+默认会进入 TUI，并根据 Clash 实时连接日志触发检测。例如访问 `music.youtube.com` 时，会触发 `youtube_music` 任务。
 
 ## TUI 快捷键
 
@@ -172,9 +160,9 @@ auto 模式会把更细的诊断事件写到数据目录下的 `diagnostics.json
 }
 ```
 
-- `interval_sec`: 周期模式检测间隔，单位秒。
-- `max_rotations`: 最大连续切换次数，`0` 表示不限制。
-- `once`: 是否只运行一次。`run-once` 命令会覆盖这个值。
+- `interval_sec`: 保留字段；当前默认 TUI 入口不使用周期模式。
+- `max_rotations`: 保留字段；当前默认 TUI 入口不使用周期模式。
+- `once`: 保留字段；当前默认 TUI 入口不使用 run-once 模式。
 
 ### `tasks`
 
@@ -247,12 +235,6 @@ uv run python -m clash_auto_switch stats "Youtube" "youtube_music"
 
 ```powershell
 uv run python -m clash_auto_switch debug-switch "Youtube" "youtube_music"
-```
-
-单独调试 YouTube Music 检测：
-
-```powershell
-uv run python -m clash_auto_switch.core.service_tester --service youtube_music --debug
 ```
 
 清除节点历史统计：

@@ -9,7 +9,6 @@ import json
 from clash_auto_switch.auto_monitor import AutoMonitorRunner
 from clash_auto_switch.config import load_app_config
 from clash_auto_switch.core.debug_tools import debug_switch_candidates
-from clash_auto_switch.monitor import PeriodicMonitorRunner
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
     get_config_file_path,
@@ -23,29 +22,14 @@ from clash_auto_switch.project import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
+        usage="%(prog)s [COMMAND]",
         description=(
-            "持续检测多个服务是否可用；若不可用则在指定Clash代理组内切换到下一个节点。\n"
-            "主要命令: auto, monitor, run-once。使用 generate-config 创建配置文件。"
+            "启动 Clash 自动切换 TUI。无子命令时直接进入 TUI。\n"
+            "使用 generate-config 创建配置文件。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
-
-    subparsers.add_parser(
-        "auto",
-        help="根据 Clash 实时连接日志自动触发服务检测",
-        description="根据 Clash 实时连接日志自动触发服务检测和切换。",
-    )
-    subparsers.add_parser(
-        "monitor",
-        help="周期检测所有启用服务",
-        description="按配置中的 monitoring.interval_sec 周期检测所有启用服务。",
-    )
-    subparsers.add_parser(
-        "run-once",
-        help="只运行一轮检测并退出",
-        description="只运行一轮检测，直到服务切换到可用节点后退出。",
-    )
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     stats_parser = subparsers.add_parser(
         "stats",
@@ -237,18 +221,11 @@ def main() -> None:
         asyncio.run(debug_switch_candidates(config.clash, args.proxy_group, args.service))
         return
 
-    if args.command == "run-once":
-        config.monitoring.once = True
-
     try:
         config_file = get_config_file_path()
         print(f"使用配置文件: {config_file}")
-        if args.command == "auto":
+        if args.command is None:
             asyncio.run(AutoMonitorRunner(config).run())
-        elif args.command in {"monitor", "run-once"}:
-            asyncio.run(PeriodicMonitorRunner(config).run())
-        else:
-            raise SystemExit(f"未知命令: {args.command}")
     except KeyboardInterrupt:
         print("收到 Ctrl-C，退出。")
         raise SystemExit(130)

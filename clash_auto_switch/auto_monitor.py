@@ -16,10 +16,10 @@ from clash_auto_switch.core.proxy_switcher import (
     switch_proxy_group_and_verify,
     switch_until_service_available,
 )
-from clash_auto_switch.core.service_hosts import SERVICE_HOST_PATTERNS
-from clash_auto_switch.core.service_tester import (
+from clash_auto_switch.core.services.probe import (
     probe_service,
 )
+from clash_auto_switch.core.services.registry import SERVICE_HOST_PATTERNS
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
 from clash_auto_switch.tui import MonitorTui
