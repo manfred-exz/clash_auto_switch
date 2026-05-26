@@ -1,14 +1,10 @@
 import asyncio
-from typing import Any, Callable, Optional
+from typing import Any
 
 import httpx
 
 from clash_auto_switch.core.clash_state import ClashProxyState
 from clash_auto_switch.core.services.registry import connection_host_patterns
-from clash_auto_switch.defs import ProxyServicePair
-
-
-EventFunc = Callable[[str, str], None]
 
 
 def connection_matches_service(connection: dict[str, Any], service_name: str) -> bool:
@@ -45,31 +41,6 @@ async def close_service_connections(
         return_exceptions=True,
     )
     return sum(1 for result in results if not isinstance(result, httpx.HTTPError))
-
-
-async def close_task_service_connections(
-    client: ClashProxyState,
-    task: ProxyServicePair,
-) -> int:
-    return await close_service_connections(client, task.service_name)
-
-
-async def close_task_service_connections_best_effort(
-    client: ClashProxyState,
-    task: ProxyServicePair,
-    event_handler: Optional[EventFunc] = None,
-) -> int:
-    """Close a task's service connections and report failures without raising."""
-    try:
-        closed_count = await close_task_service_connections(client, task)
-    except Exception as exc:
-        closed_count = 0
-        if event_handler is not None:
-            event_handler(task.service_name, f"关闭连接失败 | {exc}")
-
-    if event_handler is not None:
-        event_handler(task.service_name, f"关闭连接 | {closed_count} 个")
-    return closed_count
 
 
 def _connection_search_values(connection: dict[str, Any]) -> list[str]:

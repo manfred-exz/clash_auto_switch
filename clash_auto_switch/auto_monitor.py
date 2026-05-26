@@ -4,27 +4,14 @@ from typing import Optional
 
 import httpx
 
-from clash_auto_switch.config import (
-    add_task_to_config,
-    disabled_node_names_for_task,
-    toggle_node_disabled_for_task,
-)
+from clash_auto_switch.app_context import AppContext
+from clash_auto_switch.config import add_task_to_config
 from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler, format_interval
 from clash_auto_switch.core.clash_api import ClashClient, ClashLogEntry
 from clash_auto_switch.core.clash_state import ClashProxyState
-from clash_auto_switch.core.connections import close_task_service_connections_best_effort
-from clash_auto_switch.core.diagnostic_log import DiagnosticLogger
 from clash_auto_switch.core.notifier import notify_user
-from clash_auto_switch.core.proxy_switcher import (
-    probe_current_node_once,
-    switch_proxy_group_and_verify,
-    switch_until_service_available,
-)
-from clash_auto_switch.core.services.probe import (
-    probe_service,
-)
 from clash_auto_switch.core.services.registry import SERVICE_CHECKERS, SERVICE_HOST_PATTERNS
-from clash_auto_switch.core.storage import NodeHistoryStorage
+from clash_auto_switch.core.task import ServiceTask
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
 from clash_auto_switch.tui import MonitorTui
 
@@ -56,18 +43,18 @@ class AutoMonitorRunner:
     """Auto mode runner driven by realtime Clash logs."""
 
     def __init__(self, config: AppConfig) -> None:
-        self.config = config
-        self.storage = NodeHistoryStorage()
-        self.enabled_tasks = [task for task in config.tasks if task.enabled]
+        self.app = AppContext.initialize(config)
+        self.config = self.app.config
+        self.storage = self.app.storage
+        self.enabled_tasks = [ServiceTask.from_pair(task, self.app) for task in config.tasks if task.enabled]
         self.watched_tasks = self._watched_tasks()
         self.tui = MonitorTui(self.watched_tasks or self.enabled_tasks)
-        self.clash: ClashProxyState | None = None
         self.running_checks: dict[str, asyncio.Task] = {}
-        self.diagnostics = DiagnosticLogger()
+        self.diagnostics = self.app.diagnostics
         self.auto_detection_enabled: dict[str, bool] = {
             task.service_name: True for task in (self.watched_tasks or self.enabled_tasks)
         }
-        self.check_scheduler = AdaptiveCheckScheduler()
+        self.check_scheduler: AdaptiveCheckScheduler = self.app.check_scheduler
 
     async def run(self) -> None:
         self.storage.startup_cleanup()
@@ -82,23 +69,27 @@ class AutoMonitorRunner:
             self.config.clash.controller,
             secret=self.config.clash.secret,
         ) as client:
-            self.clash = ClashProxyState(client)
-            self.tui.set_add_task_options(
-                proxy_groups=await self.clash.list_proxy_group_names(),
-                services=self.addable_service_names(),
-            )
-            self.event("system", f"启动 auto 模式 | 监听 {len(self.watched_tasks)} 个服务")
-            self.event("system", f"诊断日志: {self.diagnostics.path}")
-            for task in self.watched_tasks:
-                self.tui.set_auto_detection_enabled(task, self.auto_detection_enabled.get(task.service_name, True))
-            await self.refresh_all_services()
-            await self.run_background_tasks()
+            self.app.set_clash(ClashProxyState(client))
+            try:
+                clash = self.app.clash
+                self.tui.set_add_task_options(
+                    proxy_groups=await clash.list_proxy_group_names(),
+                    services=self.addable_service_names(),
+                )
+                self.event("system", f"启动 auto 模式 | 监听 {len(self.watched_tasks)} 个服务")
+                self.event("system", f"诊断日志: {self.diagnostics.path}")
+                for task in self.watched_tasks:
+                    self.tui.set_auto_detection_enabled(task, self.auto_detection_enabled.get(task.service_name, True))
+                await self.refresh_all_services()
+                await self.run_background_tasks()
+            finally:
+                self.app.clear_clash()
 
     def event(self, service_name: str, message: str, *, level: str = "info") -> None:
         self.diagnostics.write("event", service_name=service_name, message=message, level=level)
         self.tui.event(service_name, message, level=level)
 
-    def _watched_tasks(self) -> list[ProxyServicePair]:
+    def _watched_tasks(self) -> list[ServiceTask]:
         tasks_by_service = {
             task.service_name: task
             for task in self.enabled_tasks
@@ -107,7 +98,7 @@ class AutoMonitorRunner:
         return [tasks_by_service[service_name] for service_name in watched_services]
 
     @property
-    def tasks_by_service(self) -> dict[str, ProxyServicePair]:
+    def tasks_by_service(self) -> dict[str, ServiceTask]:
         return {
             task.service_name: task
             for task in self.watched_tasks
@@ -144,10 +135,10 @@ class AutoMonitorRunner:
                     await task
 
     async def consume_logs(self) -> None:
-        assert self.clash is not None
+        clash = self.app.clash
         while True:
             try:
-                async for log_entry in self.clash.iter_logs(level="info"):
+                async for log_entry in clash.iter_logs(level="info"):
                     await self.handle_log_entry(log_entry)
                 self.event("system", f"日志流结束，{LOG_RECONNECT_DELAY_SEC:.0f} 秒后重连")
             except httpx.HTTPError as exc:
@@ -205,7 +196,7 @@ class AutoMonitorRunner:
             )
         )
 
-    async def check_service(self, task: ProxyServicePair) -> None:
+    async def check_service(self, task: ServiceTask) -> None:
         service_name = task.service_name
         running_task = self.running_checks.get(service_name)
         if running_task and not running_task.done():
@@ -218,16 +209,13 @@ class AutoMonitorRunner:
 
     async def run_auto_check(
         self,
-        task: ProxyServicePair,
+        task: ServiceTask,
         service_name: str,
         *,
         force: bool = False,
     ) -> None:
-        assert self.clash is not None
-
         async def after_switch(_node_name: str) -> None:
-            assert self.clash is not None
-            await close_task_service_connections_best_effort(self.clash, task, self.event)
+            await task.close_connections_best_effort(self.event)
             await self.update_tui_service(task)
             await self.update_tui_connections_if_selected()
 
@@ -240,12 +228,7 @@ class AutoMonitorRunner:
             http_proxy=self.config.clash.http_proxy,
             force=force,
         )
-        result = await switch_until_service_available(
-            self.clash,
-            task,
-            self.config.clash,
-            self.storage,
-            disabled_node_names=disabled_node_names_for_task(self.config, task),
+        result = await task.switch_until_available(
             event_handler=self.event,
             after_switch=after_switch,
         )
@@ -274,7 +257,7 @@ class AutoMonitorRunner:
         if result.switched:
             notify_user("Clash Auto Switch", f"{task.service_name} 不可用，已切换 {task.proxy_group_name}")
 
-    async def toggle_auto_detection(self, task: ProxyServicePair, enabled: bool) -> None:
+    async def toggle_auto_detection(self, task: ServiceTask, enabled: bool) -> None:
         self.auto_detection_enabled[task.service_name] = enabled
         self.tui.set_auto_detection_enabled(task, enabled)
         status = "开启" if enabled else "关闭"
@@ -286,7 +269,7 @@ class AutoMonitorRunner:
             enabled=enabled,
         )
 
-    async def add_task(self, proxy_group_name: str, service_name: str) -> Optional[ProxyServicePair]:
+    async def add_task(self, proxy_group_name: str, service_name: str) -> Optional[ServiceTask]:
         if service_name not in SERVICE_CHECKERS or service_name not in SERVICE_HOST_PATTERNS:
             self.event("system", f"未知或不可自动触发的服务: {service_name}")
             return None
@@ -294,11 +277,12 @@ class AutoMonitorRunner:
             self.event(service_name, "添加任务已跳过 | 服务已存在")
             return None
 
-        task = ProxyServicePair(proxy_group_name, service_name, enabled=True)
-        if not add_task_to_config(self.config, task):
+        pair = ProxyServicePair(proxy_group_name, service_name, enabled=True)
+        if not add_task_to_config(self.config, pair):
             self.event(service_name, "添加任务失败 | 配置保存失败")
             return None
 
+        task = ServiceTask.from_pair(pair, self.app)
         self.enabled_tasks.append(task)
         self.watched_tasks.append(task)
         self.watched_tasks.sort(key=lambda item: item.service_name)
@@ -314,8 +298,7 @@ class AutoMonitorRunner:
         await self.update_tui_connections_if_selected()
         return task
 
-    async def switch_node(self, task: ProxyServicePair, node_name: str) -> None:
-        assert self.clash is not None
+    async def switch_node(self, task: ServiceTask, node_name: str) -> None:
         service_name = task.service_name
         running_task = self.running_checks.get(service_name)
         if running_task and not running_task.done():
@@ -329,16 +312,11 @@ class AutoMonitorRunner:
             )
             return
 
-        await switch_proxy_group_and_verify(self.clash, task.proxy_group_name, node_name)
+        await task.switch_to_node(node_name)
         self.event(task.service_name, f"手动切换 | {task.proxy_group_name} -> {node_name}")
-        await close_task_service_connections_best_effort(self.clash, task, self.event)
+        await task.close_connections_best_effort(self.event)
 
-        probe_result = await probe_current_node_once(
-            self.clash,
-            task,
-            self.config.clash,
-            self.storage,
-            probe_func=probe_service,
+        probe_result = await task.probe_current_node_once(
             event_handler=self.event,
         )
         ok = probe_result.ok
@@ -359,9 +337,9 @@ class AutoMonitorRunner:
         await self.update_tui_service(task)
         await self.update_tui_connections(task)
 
-    async def disable_node(self, task: ProxyServicePair, node_name: str) -> None:
-        was_disabled = node_name in disabled_node_names_for_task(self.config, task)
-        if not toggle_node_disabled_for_task(self.config, task, node_name):
+    async def disable_node(self, task: ServiceTask, node_name: str) -> None:
+        was_disabled = node_name in task.disabled_node_names()
+        if not task.toggle_node_disabled(node_name):
             self.event(task.service_name, f"切换禁用状态失败 | {node_name}")
             return
         action = "取消禁用节点" if was_disabled else "禁用节点"
@@ -379,10 +357,10 @@ class AutoMonitorRunner:
             await self.update_tui_service(task)
         await self.update_tui_connections_if_selected()
 
-    async def update_tui_service(self, task: ProxyServicePair) -> None:
-        assert self.clash is not None
+    async def update_tui_service(self, task: ServiceTask) -> None:
+        clash = self.app.clash
         try:
-            group_state = await self.clash.get_proxy_group(task.proxy_group_name)
+            group_state = await clash.get_proxy_group(task.proxy_group_name)
         except Exception as exc:
             self.event(task.service_name, f"读取代理组失败: {exc}", level="warning")
             return
@@ -391,7 +369,7 @@ class AutoMonitorRunner:
             task,
             group_state,
             self.storage,
-            disabled_node_names=disabled_node_names_for_task(self.config, task),
+            disabled_node_names=task.disabled_node_names(),
         )
 
     async def update_tui_connections_if_selected(self) -> None:
@@ -400,10 +378,10 @@ class AutoMonitorRunner:
             return
         await self.update_tui_connections(task)
 
-    async def update_tui_connections(self, task: ProxyServicePair) -> None:
-        assert self.clash is not None
+    async def update_tui_connections(self, task: ServiceTask) -> None:
+        clash = self.app.clash
         try:
-            connections_payload = await self.clash.get_connections()
+            connections_payload = await clash.get_connections()
         except Exception as exc:
             self.tui.update_connections(task, error=str(exc))
             self.diagnostics.write(
@@ -423,16 +401,5 @@ class AutoMonitorRunner:
             total_connections=len(connections) if isinstance(connections, list) else None,
         )
 
-    async def current_node_for_task(self, task: ProxyServicePair) -> Optional[str]:
-        assert self.clash is not None
-        try:
-            group_state = await self.clash.get_proxy_group(task.proxy_group_name)
-        except Exception as exc:
-            self.diagnostics.write(
-                "current_node_read_failed",
-                service_name=task.service_name,
-                proxy_group_name=task.proxy_group_name,
-                error=str(exc),
-            )
-            return None
-        return group_state.now
+    async def current_node_for_task(self, task: ServiceTask) -> Optional[str]:
+        return await task.current_node()

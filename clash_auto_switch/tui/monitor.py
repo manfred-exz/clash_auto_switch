@@ -16,14 +16,14 @@ from textual.widgets import Button, DataTable, Footer, RichLog, Select, Static
 from clash_auto_switch.core.clash_state import ProxyGroupState
 from clash_auto_switch.core.connections import connection_matches_service
 from clash_auto_switch.core.storage import NodeHistoryStorage
-from clash_auto_switch.defs import ProxyServicePair, ServiceRecord
+from clash_auto_switch.defs import ServiceRecord, ServiceTaskRef
 
 
-SwitchNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
-DisableNodeFunc = Callable[[ProxyServicePair, str], Awaitable[None]]
-ToggleAutoDetectionFunc = Callable[[ProxyServicePair, bool], Awaitable[None]]
-CheckServiceFunc = Callable[[ProxyServicePair], Awaitable[None]]
-AddTaskFunc = Callable[[str, str], Awaitable[Optional[ProxyServicePair]]]
+SwitchNodeFunc = Callable[[ServiceTaskRef, str], Awaitable[None]]
+DisableNodeFunc = Callable[[ServiceTaskRef, str], Awaitable[None]]
+ToggleAutoDetectionFunc = Callable[[ServiceTaskRef, bool], Awaitable[None]]
+CheckServiceFunc = Callable[[ServiceTaskRef], Awaitable[None]]
+AddTaskFunc = Callable[[str, str], Awaitable[Optional[ServiceTaskRef]]]
 
 MAX_CONNECTION_ROWS = 12
 
@@ -56,7 +56,7 @@ class ConnectionRow:
 
 @dataclass
 class ServiceView:
-    task: ProxyServicePair
+    task: ServiceTaskRef
     current_node: Optional[str] = None
     last_status: str = "等待检测"
     nodes: list[NodeScore] = field(default_factory=list)
@@ -222,7 +222,7 @@ class MonitorTui(App[None]):
 
     def __init__(
         self,
-        tasks: list[ProxyServicePair],
+        tasks: list[ServiceTaskRef],
         *,
         max_events: int = 500,
         available_proxy_groups: list[str] | None = None,
@@ -316,7 +316,7 @@ class MonitorTui(App[None]):
 
     def update_service(
         self,
-        task: ProxyServicePair,
+        task: ServiceTaskRef,
         group_state: ProxyGroupState,
         storage: NodeHistoryStorage,
         *,
@@ -346,7 +346,7 @@ class MonitorTui(App[None]):
 
     def update_connections(
         self,
-        task: ProxyServicePair,
+        task: ServiceTaskRef,
         connections_payload: dict[str, Any] | None = None,
         *,
         error: str | None = None,
@@ -367,17 +367,17 @@ class MonitorTui(App[None]):
         if self._is_selected_service(service):
             self._render_connections()
 
-    def selected_task(self) -> Optional[ProxyServicePair]:
+    def selected_task(self) -> Optional[ServiceTaskRef]:
         service = self._selected_service()
         return service.task if service is not None else None
 
-    def set_auto_detection_enabled(self, task: ProxyServicePair, enabled: bool) -> None:
+    def set_auto_detection_enabled(self, task: ServiceTaskRef, enabled: bool) -> None:
         service = self._services.get(task.service_name)
         if service is not None:
             service.auto_detection_enabled = enabled
         self._render_status()
 
-    async def add_task_view(self, task: ProxyServicePair) -> None:
+    async def add_task_view(self, task: ServiceTaskRef) -> None:
         if task.service_name in self._services:
             return
         self._service_order.append(task.service_name)
@@ -397,7 +397,7 @@ class MonitorTui(App[None]):
             await self.query_one("#services").mount(table)
             self._render_all()
 
-    def selected_node(self) -> Optional[tuple[ProxyServicePair, str]]:
+    def selected_node(self) -> Optional[tuple[ServiceTaskRef, str]]:
         service = self._selected_service()
         if service is None or not service.nodes:
             return None

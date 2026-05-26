@@ -1,6 +1,9 @@
 from clash_auto_switch.core.clash_api import ClashClient
+from clash_auto_switch.app_context import AppContext
+from clash_auto_switch.core.clash_state import ClashProxyState
+from clash_auto_switch.core.task import ServiceTask
 from clash_auto_switch.defs import ClashConfig
-from clash_auto_switch.core.proxy_switcher import list_alive_proxy_candidates
+from clash_auto_switch.defs import AppConfig, MonitoringConfig, ProxyServicePair
 from clash_auto_switch.core.storage import NodeHistoryStorage
 
 
@@ -13,15 +16,23 @@ async def debug_switch_candidates(
     async with ClashClient.from_external_controller(
         clash_config.controller,
         secret=clash_config.secret,
-    ) as clash:
+    ) as client:
+        clash = ClashProxyState(client)
+        app = AppContext(
+            config=AppConfig(
+                clash=clash_config,
+                monitoring=MonitoringConfig(),
+                tasks=[ProxyServicePair(proxy_group_name, service_name)],
+            ),
+            storage=storage,
+            diagnostics=object(),
+            check_scheduler=object(),
+            _clash=clash,
+        )
+        task = ServiceTask.from_pair(ProxyServicePair(proxy_group_name, service_name), app)
         group_info = await clash.get_proxy(proxy_group_name)
         current = group_info.get("now")
-        candidates = await list_alive_proxy_candidates(
-            clash,
-            proxy_group_name,
-            service_name,
-            storage,
-        )
+        candidates = await task.list_alive_proxy_candidates()
 
     print(f"ProxyGroup: {proxy_group_name}")
     print(f"Service:    {service_name}")

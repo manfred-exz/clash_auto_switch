@@ -1,5 +1,5 @@
-from typing import Optional, List, Dict
-from dataclasses import dataclass, asdict
+from typing import Optional, List, Dict, Protocol
+from dataclasses import dataclass, asdict, field
 
 @dataclass
 class ClashConfig:
@@ -28,6 +28,12 @@ class ProxyServicePair:
     enabled: bool = True
 
 
+class ServiceTaskRef(Protocol):
+    proxy_group_name: str
+    service_name: str
+    enabled: bool
+
+
 @dataclass
 class DisabledNode:
     """User-disabled node for one proxy group and service."""
@@ -44,11 +50,7 @@ class AppConfig:
     clash: ClashConfig
     monitoring: MonitoringConfig
     tasks: List[ProxyServicePair]
-    disabled_nodes: Optional[List[DisabledNode]] = None
-
-    def __post_init__(self) -> None:
-        if self.disabled_nodes is None:
-            self.disabled_nodes = []
+    disabled_nodes: List[DisabledNode] = field(default_factory=list)
 
 
 @dataclass
@@ -62,10 +64,10 @@ class ServiceRecord:
     reliability_score: float = 0.0  # reliability metric (0.0 to 1.0)
     total_checks: int = 0  # total number of checks performed
     successful_checks: int = 0  # total number of successful checks
-    
+
     def to_dict(self) -> Dict:
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: Dict) -> "ServiceRecord":
         return cls(**data)

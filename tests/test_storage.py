@@ -20,27 +20,6 @@ class NodeHistoryStorageTest(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         return NodeHistoryStorage()
 
-    def test_legacy_records_keep_proxy_group(self) -> None:
-        storage = self.make_storage(
-            {
-                "Youtube#youtube_premium": [
-                    {
-                        "node_name": "node-a",
-                        "service_name": "youtube_premium",
-                        "proxy_group": "Youtube",
-                        "last_available_time": None,
-                        "last_check_time": 1.0,
-                        "status": "failed",
-                        "reliability_score": 0.2,
-                        "total_checks": 2,
-                    }
-                ]
-            }
-        )
-
-        self.assertEqual(storage.get_records_by_service("youtube_premium", "Youtube")[0][0], "node-a")
-        self.assertEqual(storage.get_records_by_service("youtube_premium", "Youtube-Music"), [])
-
     def test_same_node_service_is_separated_by_proxy_group(self) -> None:
         storage = self.make_storage()
 

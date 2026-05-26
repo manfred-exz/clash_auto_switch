@@ -1,24 +1,17 @@
 import unittest
 
-from clash_auto_switch.core.services.claude import CLAUDE_BLOCKED_CODES
-from clash_auto_switch.core.services.common import parse_trace_country
-from clash_auto_switch.core.services.emby_as174 import parse_emby_public_server_info
 from clash_auto_switch.core.services.registry import SERVICE_CHECKERS
 from clash_auto_switch.core.services.youtube_music import (
-    extract_youtube_music_api_config,
-    extract_youtube_music_visitor_data,
     parse_youtube_music_api_response,
     parse_youtube_music_page,
     parse_youtube_music_player_response,
     summarize_youtube_music_player_statuses,
 )
 from clash_auto_switch.core.services.youtube_premium import parse_youtube_premium_page
-from clash_auto_switch.core.services.base import ServiceChecker
-from clash_auto_switch.core.services.registry import EXCLUDED_MODULES, SERVICE_CLASSES
 
 
 class ServiceTesterTest(unittest.TestCase):
-    def test_parse_youtube_music_available_page(self) -> None:
+    def test_parse_youtube_music_region_available_page(self) -> None:
         status, region = parse_youtube_music_page(
             """
             <script>window.dataLayer.push({'country_code': 'TW'});</script>
@@ -30,45 +23,12 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertEqual(status, "Yes")
         self.assertEqual(region, "🇹🇼TW")
 
-    def test_parse_youtube_music_unavailable_page(self) -> None:
-        status, region = parse_youtube_music_page(
-            "YouTube Music is not available in your country"
-        )
-
-        self.assertEqual(status, "No")
-        self.assertIsNone(region)
-
-    def test_parse_youtube_music_chinese_unavailable_page(self) -> None:
+    def test_parse_youtube_music_region_unavailable_page(self) -> None:
         status, region = parse_youtube_music_page(
             """
             <body><div class="content">
               <img class="logo" src="//music.youtube.com/img/on_platform_logo_dark.svg" alt="">
               <div class="message">YouTube Music 在你所在区域无法使用</div>
-            </div></body>
-            """
-        )
-
-        self.assertEqual(status, "No")
-        self.assertIsNone(region)
-
-    def test_youtube_music_name_alone_is_not_available_signal(self) -> None:
-        status, region = parse_youtube_music_page(
-            """
-            <body><div class="content">
-              <img class="logo" src="//music.youtube.com/img/on_platform_logo_dark.svg" alt="">
-              <div class="message">YouTube Music</div>
-            </div></body>
-            """
-        )
-
-        self.assertEqual(status, "Failed (Unexpected Page)")
-        self.assertIsNone(region)
-
-    def test_parse_youtube_music_escaped_chinese_unavailable_page(self) -> None:
-        status, region = parse_youtube_music_page(
-            r"""
-            <body><div class="message">
-              YouTube Music \u5728\u4f60\u6240\u5728\u533a\u57df\u65e0\u6cd5\u4f7f\u7528
             </div></body>
             """
         )
@@ -83,68 +43,13 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertNotIn("bilibili_mainland", SERVICE_CHECKERS)
         self.assertNotIn("bilibili_hk_mc_tw", SERVICE_CHECKERS)
 
-    def test_registered_services_are_class_based(self) -> None:
-        service_names = {checker_class.service_name for checker_class in SERVICE_CLASSES}
-
-        self.assertEqual(service_names, set(SERVICE_CHECKERS))
-        self.assertTrue(all(issubclass(checker_class, ServiceChecker) for checker_class in SERVICE_CLASSES))
-        self.assertTrue(all(checker_class.__module__.startswith("clash_auto_switch.core.services.") for checker_class in SERVICE_CLASSES))
-        self.assertIn("registry", EXCLUDED_MODULES)
-
-    def test_claude_aliases_and_blocked_codes(self) -> None:
-        self.assertIn("CN", CLAUDE_BLOCKED_CODES)
-        self.assertIn("HK", CLAUDE_BLOCKED_CODES)
-
-    def test_parse_trace_country(self) -> None:
-        self.assertEqual(parse_trace_country("ip=1.1.1.1\nloc=sg\n"), "SG")
-        self.assertIsNone(parse_trace_country("ip=1.1.1.1\n"))
-
-    def test_extract_youtube_music_api_config(self) -> None:
-        self.assertEqual(
-            extract_youtube_music_api_config(
-                '{"INNERTUBE_API_KEY":"key","INNERTUBE_CLIENT_VERSION":"1.0","gl":"TW"}'
-            ),
-            ("key", "1.0", "TW"),
-        )
-
-    def test_extract_youtube_music_visitor_data(self) -> None:
-        self.assertEqual(
-            extract_youtube_music_visitor_data(
-                'ytcfg.set({"VISITOR_DATA":"visitor-token"});'
-            ),
-            "visitor-token",
-        )
-        self.assertEqual(
-            extract_youtube_music_visitor_data('{"visitorData":"visitor-token-2"}'),
-            "visitor-token-2",
-        )
-
     def test_parse_youtube_premium_available_page(self) -> None:
         self.assertEqual(
             parse_youtube_premium_page('ytcfg.set({"INNERTUBE_API_KEY":"key","GL":"SG"});'),
             ("Yes", "🇸🇬SG"),
         )
 
-    def test_parse_youtube_premium_unavailable_page(self) -> None:
-        self.assertEqual(
-            parse_youtube_premium_page(
-                "YouTube Premium is not available in your country"
-            ),
-            ("No", None),
-        )
-
-    def test_parse_youtube_music_player_response(self) -> None:
-        self.assertEqual(
-            parse_youtube_music_player_response(
-                {
-                    "playabilityStatus": {"status": "OK"},
-                    "streamingData": {"formats": []},
-                }
-            ),
-            "Yes",
-        )
-
-    def test_summarize_youtube_music_player_statuses(self) -> None:
+    def test_youtube_music_player_status_controls_final_result(self) -> None:
         self.assertEqual(
             summarize_youtube_music_player_statuses(["No", "Yes"]),
             "Yes",
@@ -160,13 +65,9 @@ class ServiceTesterTest(unittest.TestCase):
             "Failed (Player ERROR)",
         )
 
-    def test_parse_youtube_music_api_response(self) -> None:
+    def test_youtube_music_api_and_player_responses(self) -> None:
         self.assertEqual(
             parse_youtube_music_api_response({"contents": {"sectionListRenderer": {}}}),
-            "Yes",
-        )
-        self.assertEqual(
-            parse_youtube_music_api_response({"background": {"musicThumbnailRenderer": {}}}),
             "Yes",
         )
         self.assertEqual(

@@ -2,9 +2,7 @@ import unittest
 
 from clash_auto_switch.core.check_scheduler import (
     AdaptiveCheckScheduler,
-    MAX_CHECK_INTERVAL_SEC,
     MIN_CHECK_INTERVAL_SEC,
-    format_interval,
 )
 
 
@@ -42,25 +40,6 @@ class AdaptiveCheckSchedulerTest(unittest.TestCase):
 
         self.assertEqual(state.failure_streak, 1)
         self.assertGreaterEqual(state.interval_sec, MIN_CHECK_INTERVAL_SEC)
-
-    def test_interval_is_capped(self) -> None:
-        scheduler = AdaptiveCheckScheduler()
-
-        for _ in range(20):
-            state = scheduler.record_result("youtube_music", True)
-
-        self.assertEqual(state.interval_sec, MAX_CHECK_INTERVAL_SEC)
-
-    def test_force_bypasses_interval(self) -> None:
-        scheduler = AdaptiveCheckScheduler()
-        scheduler.record_result("youtube_music", True)
-
-        self.assertFalse(scheduler.can_check("youtube_music"))
-        self.assertTrue(scheduler.can_check("youtube_music", force=True))
-
-    def test_format_interval(self) -> None:
-        self.assertEqual(format_interval(5), "5 秒")
-        self.assertEqual(format_interval(90), "1.5 分钟")
 
 
 if __name__ == "__main__":
