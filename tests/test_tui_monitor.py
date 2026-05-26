@@ -160,10 +160,12 @@ class MonitorTuiTextualTest(unittest.IsolatedAsyncioTestCase):
         async with app.run_test() as pilot:
             await pilot.press("e")
             self.assertTrue(pilot.app.query_one("#events").has_class("events-maximized"))
-            self.assertTrue(pilot.app.query_one("#main").has_class("events-maximized"))
+            self.assertTrue(pilot.app.query_one("#services").has_class("events-maximized"))
+            self.assertTrue(pilot.app.query_one("#connection-pane").has_class("events-maximized"))
             await pilot.press("e")
             self.assertFalse(pilot.app.query_one("#events").has_class("events-maximized"))
-            self.assertFalse(pilot.app.query_one("#main").has_class("events-maximized"))
+            self.assertFalse(pilot.app.query_one("#services").has_class("events-maximized"))
+            self.assertFalse(pilot.app.query_one("#connection-pane").has_class("events-maximized"))
 
     async def test_status_line_shows_last_refresh_time(self) -> None:
         task = ProxyServicePair("Youtube", "youtube_music")

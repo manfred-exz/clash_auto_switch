@@ -149,18 +149,22 @@ class MonitorTui(App[None]):
     .service-table {
         width: 1fr;
         height: 1fr;
-        border: round cyan;
+        border: round #3a3a3a;
     }
 
     .service-table.selected {
-        border: round magenta;
+        border: round cyan;
+    }
+
+    #side-pane {
+        width: 50;
+        min-width: 38;
+        height: 1fr;
     }
 
     #connection-pane {
-        width: 48;
-        min-width: 36;
         height: 1fr;
-        border: round yellow;
+        border: round #444444;
     }
 
     #connection-title {
@@ -173,23 +177,32 @@ class MonitorTui(App[None]):
     }
 
     #events {
-        height: 7;
-        border: round green;
+        height: 11;
+        border: round #444444;
     }
 
     #status {
         height: 1;
         padding: 0 1;
-        color: $text-muted;
+        background: #202020;
+        color: #b0b0b0;
     }
 
-    #main.events-maximized {
+    #services.events-maximized {
         display: none;
+    }
+
+    #connection-pane.events-maximized {
+        display: none;
+    }
+
+    #side-pane.events-maximized {
+        width: 1fr;
     }
 
     #events.events-maximized {
         height: 1fr;
-        border: heavy green;
+        border: round cyan;
     }
     """
 
@@ -241,10 +254,11 @@ class MonitorTui(App[None]):
             with Horizontal(id="services"):
                 for task in (service.task for service in self._services.values()):
                     yield DataTable(id=self._service_table_ids[task.service_name], classes="service-table")
-            with Vertical(id="connection-pane"):
-                yield Static("连接: -", id="connection-title")
-                yield DataTable(id="connections")
-        yield RichLog(id="events", wrap=True, highlight=False, markup=False, auto_scroll=True)
+            with Vertical(id="side-pane"):
+                with Vertical(id="connection-pane"):
+                    yield Static("连接: -", id="connection-title")
+                    yield DataTable(id="connections")
+                yield RichLog(id="events", wrap=True, highlight=False, markup=False, auto_scroll=True)
         yield Static("最近刷新: -", id="status")
         yield Footer()
 
@@ -627,7 +641,9 @@ class MonitorTui(App[None]):
         return self._selected_service() is service
 
     def _apply_events_layout(self) -> None:
-        self.query_one("#main").set_class(self._events_maximized, "events-maximized")
+        self.query_one("#services").set_class(self._events_maximized, "events-maximized")
+        self.query_one("#side-pane").set_class(self._events_maximized, "events-maximized")
+        self.query_one("#connection-pane").set_class(self._events_maximized, "events-maximized")
         self.query_one("#events", RichLog).set_class(self._events_maximized, "events-maximized")
 
     def _mark_refreshed(self) -> None:
@@ -643,11 +659,21 @@ class MonitorTui(App[None]):
         if self._auto_detection_available:
             auto_enabled = selected.auto_detection_enabled if selected is not None else True
             auto_text = "开" if auto_enabled else "关"
+            auto_style = "bold green" if auto_enabled else "bold red"
         else:
             auto_text = "不可用"
-        self.query_one("#status", Static).update(
-            f"最近刷新: {refresh_text} | 当前服务: {selected_text} | 自动检测: {auto_text} | c 手动检测 | a 切换自动 | t 添加任务"
-        )
+            auto_style = "bold yellow"
+
+        status = Text()
+        status.append("最近刷新: ", style="dim")
+        status.append(refresh_text, style="bold")
+        status.append("  |  ", style="dim")
+        status.append("当前服务: ", style="dim")
+        status.append(selected_text, style="bold cyan")
+        status.append("  |  ", style="dim")
+        status.append("自动检测: ", style="dim")
+        status.append(auto_text, style=auto_style)
+        self.query_one("#status", Static).update(status)
 
 
 def build_node_scores(
