@@ -76,6 +76,11 @@ class StatefulFakeClashClient:
         self.current = "node-a"
         self.selected = None
 
+    async def get_proxy_group(self, name: str):
+        if name == "Group":
+            return type("GroupState", (), {"now": self.current})()
+        raise KeyError(name)
+
     async def get_proxy(self, name: str) -> dict:
         if name == "Group":
             return {"all": ["node-a", "node-b"], "now": self.current}
@@ -86,10 +91,15 @@ class StatefulFakeClashClient:
         self.current = proxy_name
 
 
+class NoopDiagnostics:
+    def write(self, *args, **kwargs) -> None:
+        pass
+
+
 def make_service_task(storage: FakeStorage, clash: StatefulFakeClashClient) -> ServiceTask:
     pair = ProxyServicePair("Group", "youtube_music")
     config = AppConfig(ClashConfig(), MonitoringConfig(), [pair])
-    app = AppContext(config, storage=storage, diagnostics=object(), check_scheduler=object(), _clash=clash)
+    app = AppContext(config, storage=storage, diagnostics=NoopDiagnostics(), check_scheduler=object(), _clash=clash)
     return ServiceTask.from_pair(pair, app)
 
 

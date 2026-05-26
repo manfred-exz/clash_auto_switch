@@ -7,8 +7,8 @@ import httpx
 from clash_auto_switch.app_context import AppContext
 from clash_auto_switch.config import add_task_to_config
 from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler, format_interval
-from clash_auto_switch.core.clash_api import ClashClient, ClashLogEntry
-from clash_auto_switch.core.clash_state import ClashProxyState
+from clash_auto_switch.core.clash_api import ClashApi, ClashLogEntry
+from clash_auto_switch.core.clash_api_raw import ClashClientRaw
 from clash_auto_switch.core.notifier import notify_user
 from clash_auto_switch.core.services.registry import SERVICE_CHECKERS, SERVICE_HOST_PATTERNS
 from clash_auto_switch.core.task import ServiceTask
@@ -46,15 +46,23 @@ class AutoMonitorRunner:
         self.app = AppContext.initialize(config)
         self.config = self.app.config
         self.storage = self.app.storage
-        self.enabled_tasks = [ServiceTask.from_pair(task, self.app) for task in config.tasks if task.enabled]
-        self.watched_tasks = self._watched_tasks()
-        self.tui = MonitorTui(self.watched_tasks or self.enabled_tasks)
+        self.tasks = [ServiceTask.from_pair(task, self.app) for task in config.tasks if task.enabled]
+        self._validate_configured_tasks()
+        self.tui = MonitorTui(self.tasks)
         self.running_checks: dict[str, asyncio.Task] = {}
         self.diagnostics = self.app.diagnostics
         self.auto_detection_enabled: dict[str, bool] = {
-            task.service_name: True for task in (self.watched_tasks or self.enabled_tasks)
+            task.service_name: True for task in self.tasks
         }
         self.check_scheduler: AdaptiveCheckScheduler = self.app.check_scheduler
+
+    def _validate_configured_tasks(self) -> None:
+        missing_services = sorted(
+            task.service_name for task in self.tasks if task.service_name not in SERVICE_CHECKERS
+        )
+        if missing_services:
+            missing = ", ".join(missing_services)
+            raise RuntimeError(f"配置中的 task 找不到对应的 service: {missing}")
 
     async def run(self) -> None:
         self.storage.startup_cleanup()
@@ -65,20 +73,20 @@ class AutoMonitorRunner:
             self.check_service,
             self.add_task,
         )
-        async with ClashClient.from_external_controller(
+        async with ClashClientRaw.from_external_controller(
             self.config.clash.controller,
             secret=self.config.clash.secret,
         ) as client:
-            self.app.set_clash(ClashProxyState(client))
+            self.app.set_clash(ClashApi(client))
             try:
                 clash = self.app.clash
                 self.tui.set_add_task_options(
                     proxy_groups=await clash.list_proxy_group_names(),
                     services=self.addable_service_names(),
                 )
-                self.event("system", f"启动 auto 模式 | 监听 {len(self.watched_tasks)} 个服务")
+                self.event("system", f"启动 auto 模式 | 监听 {len(self.tasks)} 个服务")
                 self.event("system", f"诊断日志: {self.diagnostics.path}")
-                for task in self.watched_tasks:
+                for task in self.tasks:
                     self.tui.set_auto_detection_enabled(task, self.auto_detection_enabled.get(task.service_name, True))
                 await self.refresh_all_services()
                 await self.run_background_tasks()
@@ -89,28 +97,16 @@ class AutoMonitorRunner:
         self.diagnostics.write("event", service_name=service_name, message=message, level=level)
         self.tui.event(service_name, message, level=level)
 
-    def _watched_tasks(self) -> list[ServiceTask]:
-        tasks_by_service = {
-            task.service_name: task
-            for task in self.enabled_tasks
-        }
-        watched_services = sorted(set(tasks_by_service) & set(SERVICE_HOST_PATTERNS))
-        return [tasks_by_service[service_name] for service_name in watched_services]
-
     @property
     def tasks_by_service(self) -> dict[str, ServiceTask]:
         return {
             task.service_name: task
-            for task in self.watched_tasks
+            for task in self.tasks
         }
 
     def addable_service_names(self) -> list[str]:
-        configured = {task.service_name for task in self.watched_tasks}
-        return sorted(
-            service_name
-            for service_name in SERVICE_CHECKERS
-            if service_name in SERVICE_HOST_PATTERNS and service_name not in configured
-        )
+        configured = {task.service_name for task in self.tasks}
+        return sorted(service_name for service_name in SERVICE_CHECKERS if service_name not in configured)
 
     async def run_background_tasks(self) -> None:
         tasks = [
@@ -270,10 +266,10 @@ class AutoMonitorRunner:
         )
 
     async def add_task(self, proxy_group_name: str, service_name: str) -> Optional[ServiceTask]:
-        if service_name not in SERVICE_CHECKERS or service_name not in SERVICE_HOST_PATTERNS:
+        if service_name not in SERVICE_CHECKERS:
             self.event("system", f"未知或不可自动触发的服务: {service_name}")
             return None
-        if any(task.service_name == service_name for task in self.watched_tasks):
+        if any(task.service_name == service_name for task in self.tasks):
             self.event(service_name, "添加任务已跳过 | 服务已存在")
             return None
 
@@ -283,9 +279,8 @@ class AutoMonitorRunner:
             return None
 
         task = ServiceTask.from_pair(pair, self.app)
-        self.enabled_tasks.append(task)
-        self.watched_tasks.append(task)
-        self.watched_tasks.sort(key=lambda item: item.service_name)
+        self.tasks.append(task)
+        self.tasks.sort(key=lambda item: item.service_name)
         self.auto_detection_enabled[task.service_name] = True
         self.tui.set_add_task_options(services=self.addable_service_names())
         self.tui.set_auto_detection_enabled(task, True)
@@ -353,7 +348,7 @@ class AutoMonitorRunner:
             await asyncio.sleep(TUI_REFRESH_INTERVAL_SEC)
 
     async def refresh_all_services(self) -> None:
-        for task in self.watched_tasks:
+        for task in self.tasks:
             await self.update_tui_service(task)
         await self.update_tui_connections_if_selected()
 

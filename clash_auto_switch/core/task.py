@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
@@ -8,7 +7,6 @@ import httpx
 
 from clash_auto_switch.app_context import AppContext
 from clash_auto_switch.config import save_app_config
-from clash_auto_switch.core.connections import connection_matches_service
 from clash_auto_switch.core.services.common import (
     check_proxy_connectivity,
     service_debug_event_handler,
@@ -211,26 +209,7 @@ class ServiceTask:
     ) -> int:
         clash = self.app.clash
         try:
-            connections_payload = await clash.get_connections()
-            connections = connections_payload.get("connections") or []
-            if not isinstance(connections, list):
-                closed_count = 0
-            else:
-                connection_ids = [
-                    connection.get("id")
-                    for connection in connections
-                    if isinstance(connection, dict)
-                    and isinstance(connection.get("id"), str)
-                    and connection_matches_service(connection, self.service_name)
-                ]
-                if connection_ids:
-                    results = await asyncio.gather(
-                        *(clash.close_connection(connection_id) for connection_id in connection_ids),
-                        return_exceptions=True,
-                    )
-                    closed_count = sum(1 for result in results if not isinstance(result, httpx.HTTPError))
-                else:
-                    closed_count = 0
+            closed_count = await clash.close_service_connections(self.service_name)
         except Exception as exc:
             closed_count = 0
             if event_handler is not None:
@@ -245,7 +224,7 @@ class ServiceTask:
         *,
         event_handler: Optional[EventFunc] = None,
     ) -> NodeProbeResult:
-        current_node = await self._current_node_from_proxy_api()
+        current_node = await self.current_node()
 
         connectivity_ok, connectivity_status = await check_proxy_connectivity(
             self.app.config.clash.http_proxy,
@@ -305,7 +284,7 @@ class ServiceTask:
             if ok or not switched:
                 return SwitchAttemptResult(ok=ok, switched=switched_any, attempts=attempts)
 
-            current_node = await self._current_node_from_proxy_api()
+            current_node = await self.current_node()
             if after_switch is not None and isinstance(current_node, str) and current_node:
                 await after_switch(current_node)
 
@@ -328,7 +307,7 @@ class ServiceTask:
         *,
         event_handler: Optional[EventFunc] = None,
     ) -> tuple[bool, bool]:
-        current_node = await self._current_node_from_proxy_api()
+        current_node = await self.current_node()
 
         connectivity_ok, connectivity_status = await check_proxy_connectivity(
             self.app.config.clash.http_proxy,
@@ -377,12 +356,3 @@ class ServiceTask:
             if event_handler is not None:
                 event_handler(self.service_name, f"切换失败 | {exc}")
             return False
-
-    async def _current_node_from_proxy_api(self) -> Optional[str]:
-        clash = self.app.clash
-        try:
-            group_state = await clash.get_proxy(self.proxy_group_name)
-            current_node = group_state.get("now")
-        except Exception:
-            return None
-        return current_node if isinstance(current_node, str) else None

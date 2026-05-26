@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Optional
 
 from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler
-from clash_auto_switch.core.clash_state import ClashProxyState
+from clash_auto_switch.core.clash_api import ClashApi
 from clash_auto_switch.core.diagnostic_log import DiagnosticLogger
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.defs import AppConfig
@@ -18,14 +18,14 @@ class AppContext:
     storage: NodeHistoryStorage
     diagnostics: DiagnosticLogger
     check_scheduler: AdaptiveCheckScheduler
-    _clash: ClashProxyState | None = None
+    _clash: ClashApi | None = None
 
     _current: ClassVar[Optional["AppContext"]] = None
 
     @property
-    def clash(self) -> ClashProxyState:
+    def clash(self) -> ClashApi:
         if self._clash is None:
-            raise RuntimeError("ClashProxyState has not been initialized")
+            raise RuntimeError("ClashApi has not been initialized")
         return self._clash
 
     @classmethod
@@ -38,7 +38,7 @@ class AppContext:
         )
         return cls._current
 
-    def set_clash(self, clash: ClashProxyState) -> None:
+    def set_clash(self, clash: ClashApi) -> None:
         self._clash = clash
 
     def clear_clash(self) -> None:

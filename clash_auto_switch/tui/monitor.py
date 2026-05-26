@@ -13,8 +13,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, RichLog, Select, Static
 
-from clash_auto_switch.core.clash_state import ProxyGroupState
-from clash_auto_switch.core.connections import connection_matches_service
+from clash_auto_switch.core.clash_api import ProxyGroupState, connection_matches_service
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.defs import ServiceRecord, ServiceTaskRef
 

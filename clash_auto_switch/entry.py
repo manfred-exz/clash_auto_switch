@@ -8,7 +8,6 @@ import json
 
 from clash_auto_switch.auto_monitor import AutoMonitorRunner
 from clash_auto_switch.config import load_app_config
-from clash_auto_switch.core.debug_tools import debug_switch_candidates
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
     get_config_file_path,
@@ -215,10 +214,6 @@ def main() -> None:
     config = load_app_config()
     if not config:
         print("错误: 配置文件为空或格式错误")
-        return
-
-    if args.command == "debug-switch":
-        asyncio.run(debug_switch_candidates(config.clash, args.proxy_group, args.service))
         return
 
     try:
