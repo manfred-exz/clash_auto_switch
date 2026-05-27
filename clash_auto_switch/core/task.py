@@ -396,7 +396,7 @@ class ServiceTaskRuntime(ServiceTask):
         running_check.add_done_callback(_clear_running_check)
         return running_check
 
-    def can_check(self, *, force: bool = False) -> bool:
+    def can_service_check(self, *, force: bool = False) -> bool:
         return self.check_scheduler.can_check(self.service_name, force=force)
 
     def remaining_check_sec(self) -> float:

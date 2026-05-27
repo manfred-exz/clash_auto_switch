@@ -62,11 +62,11 @@ class AutoMonitorRunner:
     async def run(self) -> None:
         self.storage.startup_cleanup()
         self.tui.configure_callbacks(
-            self.switch_node,
-            self.disable_node,
-            self.toggle_auto_detection,
-            self.check_service,
-            self.add_task,
+            self.tui_switch_node,
+            self.tui_disable_node,
+            self.tui_toggle_auto_detection,
+            self.tui_check_service,
+            self.tui_add_task,
         )
         async with ClashClientRaw.from_external_controller(
             self.config.clash.controller,
@@ -159,7 +159,7 @@ class AutoMonitorRunner:
             )
             return
 
-        if not task.can_check():
+        if not task.can_service_check():
             remaining = task.remaining_check_sec()
             self.event(task.service_name, f"跳过检测 | 频率控制，剩余 {format_interval(remaining)}")
             self.diagnostics.write(
@@ -183,16 +183,16 @@ class AutoMonitorRunner:
             current_node=current_node,
             payload=log_entry.payload,
         )
-        task.track_running_check(asyncio.create_task(self.run_auto_check(task)))
+        task.track_running_check(asyncio.create_task(self.check_and_switch_service(task)))
 
-    async def check_service(self, task: ServiceTaskRuntime) -> None:
+    async def tui_check_service(self, task: ServiceTaskRuntime) -> None:
         if task.is_check_running:
             self.event(task.service_name, "手动检测已跳过 | 自动检测仍在运行")
             return
         self.event(task.service_name, "手动触发检测")
-        task.track_running_check(asyncio.create_task(self.run_auto_check(task, force=True)))
+        task.track_running_check(asyncio.create_task(self.check_and_switch_service(task, force=True)))
 
-    async def run_auto_check(
+    async def check_and_switch_service(
         self,
         task: ServiceTaskRuntime,
         *,
@@ -241,7 +241,7 @@ class AutoMonitorRunner:
         if result.switched:
             notify_user("Clash Auto Switch", f"{task.service_name} 不可用，已切换 {task.proxy_group_name}")
 
-    async def toggle_auto_detection(self, task: ServiceTaskRuntime, enabled: bool) -> None:
+    async def tui_toggle_auto_detection(self, task: ServiceTaskRuntime, enabled: bool) -> None:
         task.set_auto_detection_enabled(enabled)
         self.tui.set_auto_detection_enabled(task, enabled)
         status = "开启" if enabled else "关闭"
@@ -253,7 +253,7 @@ class AutoMonitorRunner:
             enabled=enabled,
         )
 
-    async def add_task(self, proxy_group_name: str, service_name: str) -> Optional[ServiceTaskRuntime]:
+    async def tui_add_task(self, proxy_group_name: str, service_name: str) -> Optional[ServiceTaskRuntime]:
         if service_name not in SERVICE_CHECKERS:
             self.event("system", f"未知或不可自动触发的服务: {service_name}")
             return None
@@ -280,8 +280,7 @@ class AutoMonitorRunner:
         await self.update_tui_connections_if_selected()
         return task
 
-    async def switch_node(self, task: ServiceTaskRuntime, node_name: str) -> None:
-        service_name = task.service_name
+    async def tui_switch_node(self, task: ServiceTaskRuntime, node_name: str) -> None:
         if task.is_check_running:
             self.event(task.service_name, "手动切换已跳过 | 自动检测仍在运行")
             self.diagnostics.write(
@@ -318,7 +317,7 @@ class AutoMonitorRunner:
         await self.update_tui_service(task)
         await self.update_tui_connections(task)
 
-    async def disable_node(self, task: ServiceTaskRuntime, node_name: str) -> None:
+    async def tui_disable_node(self, task: ServiceTaskRuntime, node_name: str) -> None:
         was_disabled = node_name in task.disabled_node_names()
         if not task.toggle_node_disabled(node_name):
             self.event(task.service_name, f"切换禁用状态失败 | {node_name}")
