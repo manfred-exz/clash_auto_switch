@@ -99,7 +99,7 @@ class NoopDiagnostics:
 def make_service_task(storage: FakeStorage, clash: StatefulFakeClashClient) -> ServiceTask:
     pair = ProxyServicePair("Group", "youtube_music")
     config = AppConfig(ClashConfig(), MonitoringConfig(), [pair])
-    app = AppContext(config, storage=storage, diagnostics=NoopDiagnostics(), check_scheduler=object(), _clash=clash)
+    app = AppContext(config, storage=storage, diagnostics=NoopDiagnostics(), _clash=clash)
     return ServiceTask.from_pair(pair, app)
 
 

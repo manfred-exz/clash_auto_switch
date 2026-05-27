@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar, Optional
 
-from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler
 from clash_auto_switch.core.clash_api import ClashApi
 from clash_auto_switch.core.diagnostic_log import DiagnosticLogger
 from clash_auto_switch.core.storage import NodeHistoryStorage
@@ -17,7 +16,6 @@ class AppContext:
     config: AppConfig
     storage: NodeHistoryStorage
     diagnostics: DiagnosticLogger
-    check_scheduler: AdaptiveCheckScheduler
     _clash: ClashApi | None = None
 
     _current: ClassVar[Optional["AppContext"]] = None
@@ -34,7 +32,6 @@ class AppContext:
             config=config,
             storage=NodeHistoryStorage(),
             diagnostics=DiagnosticLogger(),
-            check_scheduler=AdaptiveCheckScheduler(),
         )
         return cls._current
 

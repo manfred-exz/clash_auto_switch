@@ -11,7 +11,7 @@ from clash_auto_switch.defs import AppConfig, ClashConfig, MonitoringConfig, Pro
 
 
 def make_task(config: AppConfig, pair: ProxyServicePair) -> ServiceTask:
-    return ServiceTask.from_pair(pair, AppContext(config, storage=object(), diagnostics=object(), check_scheduler=object()))
+    return ServiceTask.from_pair(pair, AppContext(config, storage=object(), diagnostics=object()))
 
 
 class ConfigTest(unittest.TestCase):

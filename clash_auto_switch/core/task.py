@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
@@ -7,6 +8,7 @@ import httpx
 
 from clash_auto_switch.app_context import AppContext
 from clash_auto_switch.config import save_app_config
+from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler, CheckScheduleState
 from clash_auto_switch.core.services.common import (
     check_proxy_connectivity,
     service_debug_event_handler,
@@ -47,7 +49,7 @@ class NodeProbeResult:
     recorded: bool
 
 
-@dataclass(frozen=True)
+@dataclass
 class ServiceTask:
     """Runtime behavior for one service plus one Clash proxy group."""
 
@@ -356,3 +358,52 @@ class ServiceTask:
             if event_handler is not None:
                 event_handler(self.service_name, f"切换失败 | {exc}")
             return False
+
+
+@dataclass
+class ServiceTaskRuntime(ServiceTask):
+    """Mutable runtime state for one service task."""
+
+    check_scheduler: AdaptiveCheckScheduler
+    running_check: asyncio.Task[None] | None = None
+    auto_detection_enabled: bool = True
+
+    @classmethod
+    def from_pair(
+        cls,
+        pair: ProxyServicePair,
+        app: AppContext | None = None,
+        *,
+        check_scheduler: AdaptiveCheckScheduler | None = None,
+    ) -> "ServiceTaskRuntime":
+        return cls(
+            pair=pair,
+            app=app or AppContext.current(),
+            check_scheduler=check_scheduler or AdaptiveCheckScheduler(),
+        )
+
+    @property
+    def is_check_running(self) -> bool:
+        return self.running_check is not None and not self.running_check.done()
+
+    def track_running_check(self, running_check: asyncio.Task[None]) -> asyncio.Task[None]:
+        self.running_check = running_check
+
+        def _clear_running_check(done_task: asyncio.Task[None]) -> None:
+            if self.running_check is done_task:
+                self.running_check = None
+
+        running_check.add_done_callback(_clear_running_check)
+        return running_check
+
+    def can_check(self, *, force: bool = False) -> bool:
+        return self.check_scheduler.can_check(self.service_name, force=force)
+
+    def remaining_check_sec(self) -> float:
+        return self.check_scheduler.remaining_sec(self.service_name)
+
+    def record_check_result(self, ok: bool) -> CheckScheduleState:
+        return self.check_scheduler.record_result(self.service_name, ok)
+
+    def set_auto_detection_enabled(self, enabled: bool) -> None:
+        self.auto_detection_enabled = enabled

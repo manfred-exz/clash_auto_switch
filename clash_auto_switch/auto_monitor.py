@@ -6,12 +6,12 @@ import httpx
 
 from clash_auto_switch.app_context import AppContext
 from clash_auto_switch.config import add_task_to_config
-from clash_auto_switch.core.check_scheduler import AdaptiveCheckScheduler, format_interval
+from clash_auto_switch.core.check_scheduler import format_interval
 from clash_auto_switch.core.clash_api import ClashApi, ClashLogEntry
 from clash_auto_switch.core.clash_api_raw import ClashClientRaw
 from clash_auto_switch.core.notifier import notify_user
 from clash_auto_switch.core.services.registry import SERVICE_CHECKERS, SERVICE_HOST_PATTERNS
-from clash_auto_switch.core.task import ServiceTask
+from clash_auto_switch.core.task import ServiceTaskRuntime
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
 from clash_auto_switch.tui import MonitorTui
 
@@ -46,15 +46,10 @@ class AutoMonitorRunner:
         self.app = AppContext.initialize(config)
         self.config = self.app.config
         self.storage = self.app.storage
-        self.tasks = [ServiceTask.from_pair(task, self.app) for task in config.tasks if task.enabled]
+        self.tasks = [ServiceTaskRuntime.from_pair(task, self.app) for task in config.tasks if task.enabled]
         self._validate_configured_tasks()
         self.tui = MonitorTui(self.tasks)
-        self.running_checks: dict[str, asyncio.Task] = {}
         self.diagnostics = self.app.diagnostics
-        self.auto_detection_enabled: dict[str, bool] = {
-            task.service_name: True for task in self.tasks
-        }
-        self.check_scheduler: AdaptiveCheckScheduler = self.app.check_scheduler
 
     def _validate_configured_tasks(self) -> None:
         missing_services = sorted(
@@ -87,7 +82,7 @@ class AutoMonitorRunner:
                 self.event("system", f"启动 auto 模式 | 监听 {len(self.tasks)} 个服务")
                 self.event("system", f"诊断日志: {self.diagnostics.path}")
                 for task in self.tasks:
-                    self.tui.set_auto_detection_enabled(task, self.auto_detection_enabled.get(task.service_name, True))
+                    self.tui.set_auto_detection_enabled(task, task.auto_detection_enabled)
                 await self.refresh_all_services()
                 await self.run_background_tasks()
             finally:
@@ -98,7 +93,7 @@ class AutoMonitorRunner:
         self.tui.event(service_name, message, level=level)
 
     @property
-    def tasks_by_service(self) -> dict[str, ServiceTask]:
+    def tasks_by_service(self) -> dict[str, ServiceTaskRuntime]:
         return {
             task.service_name: task
             for task in self.tasks
@@ -106,7 +101,11 @@ class AutoMonitorRunner:
 
     def addable_service_names(self) -> list[str]:
         configured = {task.service_name for task in self.tasks}
-        return sorted(service_name for service_name in SERVICE_CHECKERS if service_name not in configured)
+        return sorted(
+            service_name
+            for service_name in SERVICE_CHECKERS
+            if service_name in SERVICE_HOST_PATTERNS and service_name not in configured
+        )
 
     async def run_background_tasks(self) -> None:
         tasks = [
@@ -123,10 +122,10 @@ class AutoMonitorRunner:
             self.tui.exit()
             raise
         finally:
-            for task in [*pending, *self.running_checks.values()]:
+            for task in pending:
                 if not task.done():
                     task.cancel()
-            for task in [*pending, *self.running_checks.values()]:
+            for task in pending:
                 with suppress(asyncio.CancelledError):
                     await task
 
@@ -135,23 +134,22 @@ class AutoMonitorRunner:
         while True:
             try:
                 async for log_entry in clash.iter_logs(level="info"):
-                    await self.handle_log_entry(log_entry)
+                    await self.consume_log_entry(log_entry)
                 self.event("system", f"日志流结束，{LOG_RECONNECT_DELAY_SEC:.0f} 秒后重连")
             except httpx.HTTPError as exc:
                 self.event("system", f"日志流断开，{LOG_RECONNECT_DELAY_SEC:.0f} 秒后重连 | {type(exc).__name__}")
             await asyncio.sleep(LOG_RECONNECT_DELAY_SEC)
 
-    async def handle_log_entry(self, log_entry: ClashLogEntry) -> None:
+    async def consume_log_entry(self, log_entry: ClashLogEntry) -> None:
         service_name = match_auto_trigger_service(log_entry)
-        task = self.tasks_by_service.get(service_name or "")
-        if service_name is None or task is None:
+        if not service_name:
             return
 
-        if not self.auto_detection_enabled.get(task.service_name, True):
+        task = self.tasks_by_service.get(service_name)
+        if not (task and task.auto_detection_enabled):
             return
 
-        running_task = self.running_checks.get(service_name)
-        if running_task and not running_task.done():
+        if task.is_check_running:
             self.event(task.service_name, "跳过检测 | 上次检测仍在运行")
             self.diagnostics.write(
                 "auto_trigger_skipped",
@@ -161,15 +159,15 @@ class AutoMonitorRunner:
             )
             return
 
-        if not self.check_scheduler.can_check(service_name):
-            remaining = self.check_scheduler.remaining_sec(service_name)
+        if not task.can_check():
+            remaining = task.remaining_check_sec()
             self.event(task.service_name, f"跳过检测 | 频率控制，剩余 {format_interval(remaining)}")
             self.diagnostics.write(
                 "auto_trigger_skipped",
                 service_name=task.service_name,
                 reason="adaptive_interval",
                 remaining_sec=remaining,
-                interval_sec=self.check_scheduler.state(service_name).interval_sec,
+                interval_sec=task.check_scheduler.state(service_name).interval_sec,
                 payload=log_entry.payload,
             )
             return
@@ -185,28 +183,18 @@ class AutoMonitorRunner:
             current_node=current_node,
             payload=log_entry.payload,
         )
-        self.running_checks[service_name] = asyncio.create_task(
-            self.run_auto_check(
-                task,
-                service_name,
-            )
-        )
+        task.track_running_check(asyncio.create_task(self.run_auto_check(task)))
 
-    async def check_service(self, task: ServiceTask) -> None:
-        service_name = task.service_name
-        running_task = self.running_checks.get(service_name)
-        if running_task and not running_task.done():
+    async def check_service(self, task: ServiceTaskRuntime) -> None:
+        if task.is_check_running:
             self.event(task.service_name, "手动检测已跳过 | 自动检测仍在运行")
             return
         self.event(task.service_name, "手动触发检测")
-        self.running_checks[service_name] = asyncio.create_task(
-            self.run_auto_check(task, service_name, force=True)
-        )
+        task.track_running_check(asyncio.create_task(self.run_auto_check(task, force=True)))
 
     async def run_auto_check(
         self,
-        task: ServiceTask,
-        service_name: str,
+        task: ServiceTaskRuntime,
         *,
         force: bool = False,
     ) -> None:
@@ -228,7 +216,7 @@ class AutoMonitorRunner:
             event_handler=self.event,
             after_switch=after_switch,
         )
-        schedule = self.check_scheduler.record_result(service_name, result.ok and not result.switched)
+        schedule = task.record_check_result(result.ok and not result.switched)
         await self.update_tui_service(task)
         await self.update_tui_connections_if_selected()
         after_node = await self.current_node_for_task(task)
@@ -253,8 +241,8 @@ class AutoMonitorRunner:
         if result.switched:
             notify_user("Clash Auto Switch", f"{task.service_name} 不可用，已切换 {task.proxy_group_name}")
 
-    async def toggle_auto_detection(self, task: ServiceTask, enabled: bool) -> None:
-        self.auto_detection_enabled[task.service_name] = enabled
+    async def toggle_auto_detection(self, task: ServiceTaskRuntime, enabled: bool) -> None:
+        task.set_auto_detection_enabled(enabled)
         self.tui.set_auto_detection_enabled(task, enabled)
         status = "开启" if enabled else "关闭"
         self.event(task.service_name, f"{status}自动检测与自动切换")
@@ -265,7 +253,7 @@ class AutoMonitorRunner:
             enabled=enabled,
         )
 
-    async def add_task(self, proxy_group_name: str, service_name: str) -> Optional[ServiceTask]:
+    async def add_task(self, proxy_group_name: str, service_name: str) -> Optional[ServiceTaskRuntime]:
         if service_name not in SERVICE_CHECKERS:
             self.event("system", f"未知或不可自动触发的服务: {service_name}")
             return None
@@ -278,10 +266,9 @@ class AutoMonitorRunner:
             self.event(service_name, "添加任务失败 | 配置保存失败")
             return None
 
-        task = ServiceTask.from_pair(pair, self.app)
+        task = ServiceTaskRuntime.from_pair(pair, self.app)
         self.tasks.append(task)
         self.tasks.sort(key=lambda item: item.service_name)
-        self.auto_detection_enabled[task.service_name] = True
         self.tui.set_add_task_options(services=self.addable_service_names())
         self.tui.set_auto_detection_enabled(task, True)
         self.diagnostics.write(
@@ -293,10 +280,9 @@ class AutoMonitorRunner:
         await self.update_tui_connections_if_selected()
         return task
 
-    async def switch_node(self, task: ServiceTask, node_name: str) -> None:
+    async def switch_node(self, task: ServiceTaskRuntime, node_name: str) -> None:
         service_name = task.service_name
-        running_task = self.running_checks.get(service_name)
-        if running_task and not running_task.done():
+        if task.is_check_running:
             self.event(task.service_name, "手动切换已跳过 | 自动检测仍在运行")
             self.diagnostics.write(
                 "manual_switch_skipped",
@@ -316,7 +302,7 @@ class AutoMonitorRunner:
         )
         ok = probe_result.ok
         status_text = probe_result.status_text
-        schedule = self.check_scheduler.record_result(service_name, ok)
+        schedule = task.record_check_result(ok)
         status = "服务可用" if ok else "服务不可用"
         self.event(task.service_name, f"{status} | {status_text} | 节点: {node_name}")
         self.event(task.service_name, f"下次自动检测最短间隔: {format_interval(schedule.interval_sec)}")
@@ -332,7 +318,7 @@ class AutoMonitorRunner:
         await self.update_tui_service(task)
         await self.update_tui_connections(task)
 
-    async def disable_node(self, task: ServiceTask, node_name: str) -> None:
+    async def disable_node(self, task: ServiceTaskRuntime, node_name: str) -> None:
         was_disabled = node_name in task.disabled_node_names()
         if not task.toggle_node_disabled(node_name):
             self.event(task.service_name, f"切换禁用状态失败 | {node_name}")
@@ -352,7 +338,7 @@ class AutoMonitorRunner:
             await self.update_tui_service(task)
         await self.update_tui_connections_if_selected()
 
-    async def update_tui_service(self, task: ServiceTask) -> None:
+    async def update_tui_service(self, task: ServiceTaskRuntime) -> None:
         clash = self.app.clash
         try:
             group_state = await clash.get_proxy_group(task.proxy_group_name)
@@ -373,7 +359,7 @@ class AutoMonitorRunner:
             return
         await self.update_tui_connections(task)
 
-    async def update_tui_connections(self, task: ServiceTask) -> None:
+    async def update_tui_connections(self, task: ServiceTaskRuntime) -> None:
         clash = self.app.clash
         try:
             connections_payload = await clash.get_connections()
@@ -396,5 +382,5 @@ class AutoMonitorRunner:
             total_connections=len(connections) if isinstance(connections, list) else None,
         )
 
-    async def current_node_for_task(self, task: ServiceTask) -> Optional[str]:
+    async def current_node_for_task(self, task: ServiceTaskRuntime) -> Optional[str]:
         return await task.current_node()
