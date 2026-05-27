@@ -11,8 +11,9 @@
 - 希望在终端 TUI 中查看每个服务的节点得分、成功率和当前节点
 
 实现原理：
-如当你配置了YoutubeMusic(Clash ProxyGroup)和youtube_music(`clash-auto-switch`支持的service)后，
-`clash-auto-switch` 会：
+
+如当你配置了YoutubeMusic(Clash ProxyGroup)和youtube_music(`clash-auto-switch`支持的service)后，`clash-auto-switch` 会：
+
 - 监控 Clash 实时连接日志
 - 发现 youtube_music 服务的连接
   - 触发服务可用性检查
