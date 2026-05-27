@@ -15,7 +15,6 @@ def load_app_config() -> Optional[AppConfig]:
 def parse_config_data(data: dict) -> AppConfig:
     """Parse configuration data into AppConfig object."""
     clash_data = data.get("clash", {})
-    monitoring_data = data.get("monitoring", {})
     tasks_data = data.get("tasks", [])
     disabled_nodes_data = data.get("disabled_nodes", [])
 
@@ -23,12 +22,6 @@ def parse_config_data(data: dict) -> AppConfig:
         controller=clash_data.get("controller", "127.0.0.1:9097"),
         secret=clash_data.get("secret"),
         http_proxy=clash_data.get("http_proxy", "http://127.0.0.1:7890"),
-    )
-
-    monitoring_config = MonitoringConfig(
-        interval_sec=monitoring_data.get("interval_sec", 30.0),
-        max_rotations=monitoring_data.get("max_rotations", 0),
-        once=monitoring_data.get("once", False),
     )
 
     tasks = [
@@ -54,7 +47,6 @@ def parse_config_data(data: dict) -> AppConfig:
 
     return AppConfig(
         clash=clash_config,
-        monitoring=monitoring_config,
         tasks=tasks,
         disabled_nodes=disabled_nodes,
     )
@@ -67,11 +59,6 @@ def dump_config_data(config: AppConfig) -> dict:
             "controller": config.clash.controller,
             "secret": config.clash.secret,
             "http_proxy": config.clash.http_proxy,
-        },
-        "monitoring": {
-            "interval_sec": config.monitoring.interval_sec,
-            "max_rotations": config.monitoring.max_rotations,
-            "once": config.monitoring.once,
         },
         "tasks": [
             {

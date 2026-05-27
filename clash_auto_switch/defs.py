@@ -48,7 +48,6 @@ class AppConfig:
     """Complete application configuration."""
 
     clash: ClashConfig
-    monitoring: MonitoringConfig
     tasks: List[ProxyServicePair]
     disabled_nodes: List[DisabledNode] = field(default_factory=list)
 

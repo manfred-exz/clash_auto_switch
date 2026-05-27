@@ -4,28 +4,21 @@ Command line entry point and argument parsing for clash_auto_switch.
 
 import argparse
 import asyncio
-import json
 
 from clash_auto_switch.auto_monitor import AutoMonitorRunner
-from clash_auto_switch.config import load_app_config
+from clash_auto_switch.config import load_app_config, parse_config_data, save_app_config
 from clash_auto_switch.core.storage import NodeHistoryStorage
 from clash_auto_switch.project import (
     get_config_file_path,
     get_data_file_path,
-    load_config,
-    save_config,
     has_config,
-    get_template_config,
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         usage="%(prog)s [COMMAND]",
-        description=(
-            "启动 Clash 自动切换 TUI。无子命令时直接进入 TUI。\n"
-            "使用 generate-config 创建配置文件。"
-        ),
+        description="启动 Clash 自动切换 TUI。无子命令时直接进入 TUI。",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -58,16 +51,6 @@ def parse_args() -> argparse.Namespace:
         "clear-stats",
         help="清除节点统计信息",
         description="清除本地节点统计信息。",
-    )
-    subparsers.add_parser(
-        "show-config",
-        help="显示当前配置文件位置和内容",
-        description="显示当前配置文件位置和内容。",
-    )
-    subparsers.add_parser(
-        "generate-config",
-        help="生成配置文件模板",
-        description="生成配置文件模板到默认位置。",
     )
 
     return parser.parse_args()
@@ -151,44 +134,50 @@ def show_detailed_statistics(service_name: str, proxy_group_name: str | None = N
               f"{status_emoji}")
 
 
-def generate_config_template() -> str:
-    """Generate configuration template file to the standard location."""
-    template_content = get_template_config()
-
-    if save_config(template_content):
-        config_file = get_config_file_path()
-        print(f"配置文件模板已生成: {config_file}")
-        print("请根据需要修改配置文件中的代理组名称、服务名称等设置。")
-        return str(config_file)
-    else:
-        raise RuntimeError("配置文件生成失败")
+def _prompt(text: str, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{text}{suffix}: ").strip()
+    return value or (default or "")
 
 
-def show_config_info() -> None:
-    """Display current configuration file location and content."""
+def _ensure_runtime_config_interactive() -> None:
     config_file = get_config_file_path()
-    print(f"配置文件位置: {config_file}")
+    config = load_app_config()
+    if config is None:
+        config = parse_config_data({})
 
-    if has_config():
-        print("配置文件内容:")
-        data = load_config()
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        print("配置文件不存在。使用 generate-config 创建配置文件。")
+    need_prompt = (
+        not config.clash.controller.strip()
+        or not config.clash.http_proxy.strip()
+        or not has_config()
+    )
+    if not need_prompt:
+        return
+
+    print(f"配置文件: {config_file}")
+    print("首次启动或缺少必要参数，请输入 Clash 连接信息。")
+    config.clash.controller = _prompt("external-controller", config.clash.controller).strip()
+    while not config.clash.controller:
+        print("controller 不能为空。")
+        config.clash.controller = _prompt("external-controller", "127.0.0.1:9097").strip()
+
+    secret_value = _prompt("secret (可留空)", config.clash.secret or "")
+    config.clash.secret = secret_value or None
+
+    config.clash.http_proxy = _prompt("http_proxy", config.clash.http_proxy).strip()
+    while not config.clash.http_proxy:
+        print("http_proxy 不能为空。")
+        config.clash.http_proxy = _prompt("http_proxy", "http://127.0.0.1:7890").strip()
+
+    if not save_app_config(config):
+        raise RuntimeError(f"配置文件保存失败: {config_file}")
+    print(f"配置已保存: {config_file}")
+    print("启动后可按 t 添加 task。")
 
 
 def main() -> None:
     """Main entry point for the application."""
     args = parse_args()
-
-    # Handle utility operations
-    if args.command == "generate-config":
-        generate_config_template()
-        return
-
-    if args.command == "show-config":
-        show_config_info()
-        return
 
     if args.command == "clear-stats":
         get_data_file_path().unlink(missing_ok=True)
@@ -204,13 +193,7 @@ def main() -> None:
         show_all_statistics()
         return
 
-    # Load configuration file
-    if not has_config():
-        print("错误: 配置文件不存在")
-        print("使用 generate-config 创建配置文件")
-        print("使用 show-config 查看配置文件信息")
-        return
-
+    _ensure_runtime_config_interactive()
     config = load_app_config()
     if not config:
         print("错误: 配置文件为空或格式错误")
