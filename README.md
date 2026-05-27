@@ -24,11 +24,18 @@
 
 ## Quickstart
 
-### 1. 启动
+### 1. 安装&启动
 
 ```bash
-uv run python -m clash_auto_switch
+uv tool install git+https://github.com/manfred-exz/clash_auto_switch/
+clash-auto-switch
 ```
+
+不安装使用：
+```bash
+uvx --from git+https://github.com/manfred-exz/clash_auto_switch/ clash-auto-switch
+```
+
 ![TUI](./images/1.jpg)
 
 ### 2. 初始化配置
