@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional, Tuple
 
 from clash_auto_switch.core.services.common import format_result_status
-from clash_auto_switch.core.services.registry import SERVICE_CHECKERS
+from clash_auto_switch.core.services.registry import get_service
 
 
 async def probe_service(
@@ -13,12 +13,11 @@ async def probe_service(
 ) -> Tuple[bool, str]:
     """Return (is_unlocked, human_status)."""
 
-    checker = SERVICE_CHECKERS.get(service_name)
-    if checker:
-        result = await checker(proxy_url)
-        return result.status == "Yes", format_result_status(result)
-
-    return False, f"未知服务: {service_name}"
+    try:
+        result = await get_service(service_name).check(proxy_url)
+    except KeyError:
+        return False, f"未知服务: {service_name}"
+    return result.status == "Yes", format_result_status(result)
 
 
 async def probe_service_multi(

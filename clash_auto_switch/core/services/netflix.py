@@ -77,12 +77,12 @@ async def check_netflix(proxy: Optional[str] = None) -> TestResultItem:
             return TestResultItem("Netflix", f"Failed (Request Error: {e})")
 
 
-
 class NetflixChecker(ServiceChecker):
     service_name = "netflix"
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("netflix.com", "nflxvideo.net", "fast.com"),
         extra_connection_hosts=("netflix.com", "nflxvideo.net", "nflximg.net", "fast.com"),
+        active_connection_hosts=("nflxvideo.net",),
     )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

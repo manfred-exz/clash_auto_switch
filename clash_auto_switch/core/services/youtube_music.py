@@ -491,6 +491,7 @@ class YouTubeMusicChecker(ServiceChecker):
             "ytimg.com",
             "youtube.com",
         ),
+        active_connection_hosts=("googlevideo.com",),
     )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

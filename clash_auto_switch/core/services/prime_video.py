@@ -44,6 +44,7 @@ class PrimeVideoChecker(ServiceChecker):
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("primevideo.com", "amazonvideo.com"),
         extra_connection_hosts=("primevideo.com", "amazonvideo.com", "media-amazon.com"),
+        active_connection_hosts=("amazonvideo.com",),
     )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

@@ -4,20 +4,32 @@ from typing import Optional
 
 import httpx
 
-from .base import ServiceHostPatterns
+from .base import ServiceChecker, ServiceCheckResult, ServiceHostPatterns
 from .common import create_http_client, TestResultItem
 
 
-HOST_PATTERNS_BY_SERVICE = {
-    "bilibili_mainland": ServiceHostPatterns(
+class BilibiliMainlandChecker(ServiceChecker):
+    service_name = "bilibili_mainland"
+    host_patterns = ServiceHostPatterns(
         trigger_hosts=("bilibili.com", "bilibili.tv"),
         extra_connection_hosts=("bilibili.com", "hdslb.com", "bilivideo.com"),
-    ),
-    "bilibili_hk_mc_tw": ServiceHostPatterns(
+        active_connection_hosts=("bilivideo.com", "hdslb.com"),
+    )
+
+    async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:
+        return await check_bilibili_china_mainland(proxy)
+
+
+class BilibiliHkMcTwChecker(ServiceChecker):
+    service_name = "bilibili_hk_mc_tw"
+    host_patterns = ServiceHostPatterns(
         trigger_hosts=("bilibili.com", "bilibili.tv"),
         extra_connection_hosts=("bilibili.com", "hdslb.com", "bilivideo.com"),
-    ),
-}
+        active_connection_hosts=("bilivideo.com", "hdslb.com"),
+    )
+
+    async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:
+        return await check_bilibili_hk_mc_tw(proxy)
 
 
 async def check_bilibili_china_mainland(proxy: Optional[str] = None) -> TestResultItem:

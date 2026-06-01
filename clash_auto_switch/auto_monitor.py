@@ -6,11 +6,10 @@ import httpx
 
 from clash_auto_switch.app_context import AppContext
 from clash_auto_switch.config import add_task_to_config
-from clash_auto_switch.core.check_scheduler import format_interval
 from clash_auto_switch.core.clash_api import ClashApi, ClashLogEntry
 from clash_auto_switch.core.clash_api_raw import ClashClientRaw
 from clash_auto_switch.core.notifier import notify_user
-from clash_auto_switch.core.services.registry import SERVICE_CHECKERS, SERVICE_HOST_PATTERNS
+from clash_auto_switch.core.services.registry import get_service, get_all_services
 from clash_auto_switch.core.task import ServiceTaskRuntime
 from clash_auto_switch.defs import AppConfig, ProxyServicePair
 from clash_auto_switch.tui import MonitorTui
@@ -33,9 +32,12 @@ def match_auto_trigger_service(log_entry: ClashLogEntry) -> Optional[str]:
     candidates.append(log_entry.payload)
 
     haystack = " ".join(value for value in candidates if value).lower()
-    for service_name, patterns in SERVICE_HOST_PATTERNS.items():
+    for service in get_all_services():
+        patterns = service.host_patterns
+        if patterns is None:
+            continue
         if any(pattern in haystack for pattern in patterns.trigger_hosts):
-            return service_name
+            return service.service_name
     return None
 
 
@@ -52,11 +54,14 @@ class AutoMonitorRunner:
         self.diagnostics = self.app.diagnostics
 
     def _validate_configured_tasks(self) -> None:
-        missing_services = sorted(
-            task.service_name for task in self.tasks if task.service_name not in SERVICE_CHECKERS
-        )
+        missing_services = []
+        for task in self.tasks:
+            try:
+                get_service(task.service_name)
+            except KeyError:
+                missing_services.append(task.service_name)
         if missing_services:
-            missing = ", ".join(missing_services)
+            missing = ", ".join(sorted(missing_services))
             raise RuntimeError(f"配置中的 task 找不到对应的 service: {missing}")
 
     async def run(self) -> None:
@@ -102,9 +107,9 @@ class AutoMonitorRunner:
     def addable_service_names(self) -> list[str]:
         configured = {task.service_name for task in self.tasks}
         return sorted(
-            service_name
-            for service_name in SERVICE_CHECKERS
-            if service_name in SERVICE_HOST_PATTERNS and service_name not in configured
+            service.service_name
+            for service in get_all_services()
+            if service.service_name not in configured
         )
 
     async def run_background_tasks(self) -> None:
@@ -159,15 +164,14 @@ class AutoMonitorRunner:
             )
             return
 
-        if not task.can_service_check():
-            remaining = task.remaining_check_sec()
-            self.event(task.service_name, f"跳过检测 | 频率控制，剩余 {format_interval(remaining)}")
+        active_connection_count = await self.active_connection_count(task)
+        if active_connection_count > 0:
+            self.event(task.service_name, f"跳过检测 | 服务正在使用中，活动连接 {active_connection_count} 个")
             self.diagnostics.write(
                 "auto_trigger_skipped",
                 service_name=task.service_name,
-                reason="adaptive_interval",
-                remaining_sec=remaining,
-                interval_sec=task.check_scheduler.state(service_name).interval_sec,
+                reason="service_active",
+                active_connection_count=active_connection_count,
                 payload=log_entry.payload,
             )
             return
@@ -216,7 +220,6 @@ class AutoMonitorRunner:
             event_handler=self.event,
             after_switch=after_switch,
         )
-        schedule = task.record_check_result(result.ok and not result.switched)
         await self.update_tui_service(task)
         await self.update_tui_connections_if_selected()
         after_node = await self.current_node_for_task(task)
@@ -229,13 +232,6 @@ class AutoMonitorRunner:
             ok=result.ok,
             switched=result.switched,
             attempts=result.attempts,
-            next_interval_sec=schedule.interval_sec,
-            success_streak=schedule.success_streak,
-            failure_streak=schedule.failure_streak,
-        )
-        self.event(
-            task.service_name,
-            f"下次自动检测最短间隔: {format_interval(schedule.interval_sec)}",
         )
 
         if result.switched:
@@ -254,7 +250,9 @@ class AutoMonitorRunner:
         )
 
     async def tui_add_task(self, proxy_group_name: str, service_name: str) -> Optional[ServiceTaskRuntime]:
-        if service_name not in SERVICE_CHECKERS:
+        try:
+            get_service(service_name)
+        except KeyError:
             self.event("system", f"未知或不可自动触发的服务: {service_name}")
             return None
         if any(task.service_name == service_name for task in self.tasks):
@@ -301,10 +299,8 @@ class AutoMonitorRunner:
         )
         ok = probe_result.ok
         status_text = probe_result.status_text
-        schedule = task.record_check_result(ok)
         status = "服务可用" if ok else "服务不可用"
         self.event(task.service_name, f"{status} | {status_text} | 节点: {node_name}")
-        self.event(task.service_name, f"下次自动检测最短间隔: {format_interval(schedule.interval_sec)}")
         self.diagnostics.write(
             "manual_switch_probe",
             service_name=task.service_name,
@@ -312,7 +308,6 @@ class AutoMonitorRunner:
             node_name=node_name,
             ok=ok,
             status_text=status_text,
-            next_interval_sec=schedule.interval_sec,
         )
         await self.update_tui_service(task)
         await self.update_tui_connections(task)
@@ -383,3 +378,16 @@ class AutoMonitorRunner:
 
     async def current_node_for_task(self, task: ServiceTaskRuntime) -> Optional[str]:
         return await task.current_node()
+
+    async def active_connection_count(self, task: ServiceTaskRuntime) -> int:
+        clash = self.app.clash
+        try:
+            return await clash.count_active_service_connections(task.service_name)
+        except Exception as exc:
+            self.diagnostics.write(
+                "active_connections_read_failed",
+                service_name=task.service_name,
+                proxy_group_name=task.proxy_group_name,
+                error=str(exc),
+            )
+            return 0

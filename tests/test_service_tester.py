@@ -1,6 +1,6 @@
 import unittest
 
-from clash_auto_switch.core.services.registry import SERVICE_CHECKERS
+from clash_auto_switch.core.services.registry import get_service
 from clash_auto_switch.core.services.youtube_music import (
     parse_youtube_music_api_response,
     parse_youtube_music_page,
@@ -37,11 +37,10 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertIsNone(region)
 
     def test_service_checker_registration_defaults(self) -> None:
-        self.assertIn("chatgpt", SERVICE_CHECKERS)
-        self.assertIn("claude", SERVICE_CHECKERS)
-        self.assertIn("emby_as174", SERVICE_CHECKERS)
-        self.assertNotIn("bilibili_mainland", SERVICE_CHECKERS)
-        self.assertNotIn("bilibili_hk_mc_tw", SERVICE_CHECKERS)
+        self.assertEqual(get_service("chatgpt").service_name, "chatgpt")
+        self.assertEqual(get_service("claude").service_name, "claude")
+        self.assertEqual(get_service("bilibili_mainland").service_name, "bilibili_mainland")
+        self.assertEqual(get_service("bilibili_hk_mc_tw").service_name, "bilibili_hk_mc_tw")
 
     def test_parse_youtube_premium_available_page(self) -> None:
         self.assertEqual(

@@ -46,7 +46,7 @@ Responsibilities:
 - Build enabled auto-trigger tasks from config.
 - Consume `ClashProxyState.iter_logs()`.
 - Match log destinations to services.
-- Run availability checks only when matching traffic is observed.
+- Run availability checks only when matching traffic is observed and the service is not already active.
 - Switch nodes through `switch_until_service_available()`.
 - Handle TUI manual switching and node disabling.
 - Refresh TUI state periodically.
@@ -109,6 +109,21 @@ Keep checkers conservative: return `Yes` only when the service is actually usabl
 Add `host_patterns = ServiceHostPatterns(...)` to the service checker class.
 
 Patterns are substring matches against the parsed destination host and raw log payload. Prefer specific hostnames to broad domains when two services share infrastructure, for example YouTube Premium and YouTube Music.
+
+`ServiceHostPatterns` has three host groups:
+
+- `trigger_hosts`: realtime log hosts that can trigger auto detection.
+- `extra_connection_hosts`: hosts shown in the TUI connection panel and closed after switching.
+- `active_connection_hosts`: hosts that mean the service is currently being used successfully; if any active connection exists, auto detection is skipped.
+
+Active connection checks are conservative. Add `active_connection_hosts` only for traffic that strongly indicates playback or service use, not ordinary page/API bootstrap traffic. Current active signals include:
+
+- `youtube_music`: `googlevideo.com`
+- `netflix`: `nflxvideo.net`
+- `prime_video`: `amazonvideo.com`
+- `bilibili_mainland` / `bilibili_hk_mc_tw`: `bilivideo.com`, `hdslb.com`
+
+Auto mode no longer uses `AdaptiveCheckScheduler` for trigger throttling. The scheduler code remains in the tree for now, but `AutoMonitorRunner` should not call it in the default auto-trigger path.
 
 ## Manual Node Disable
 

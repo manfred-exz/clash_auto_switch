@@ -17,6 +17,7 @@ class ServiceHostPatterns:
 
     trigger_hosts: tuple[str, ...]
     extra_connection_hosts: tuple[str, ...] = ()
+    active_connection_hosts: tuple[str, ...] = ()
 
     @property
     def connection_match_hosts(self) -> tuple[str, ...]:
@@ -27,7 +28,7 @@ class ServiceChecker(ABC):
     """Base class for one service availability checker."""
 
     service_name: str
-    host_patterns: ServiceHostPatterns | None = None
+    host_patterns: ServiceHostPatterns
 
     @abstractmethod
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

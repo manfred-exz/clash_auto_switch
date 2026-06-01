@@ -16,6 +16,8 @@
 
 - 监控 Clash 实时连接日志
 - 发现 youtube_music 服务的连接
+  - 先检查 Clash 当前连接中是否已有服务正在使用的连接
+  - 例如存在 `*.googlevideo.com` 连接时，认为 `youtube_music` 正在使用且当前可用，默认不触发自动检测
   - 触发服务可用性检查
   - 若不可用，自动切换到下一个节点
   - 循环
@@ -68,6 +70,15 @@ uvx --from git+https://github.com/manfred-exz/clash_auto_switch/ clash-auto-swit
 
 服务检测前会先通过当前节点访问 `https://cp.cloudflare.com/generate_204` 做基础连通性检查。若该检查失败，会直接跳过当前节点并尝试切换到下一个候选。
 
+自动检测不再使用自适应频率间隔。只要命中服务日志且服务没有处于 active 使用状态，就会触发检测；手动检测不受 active 判定影响。
+
+active 使用状态判定来自 Clash `/connections`：
+
+- `youtube_music`: 存在 `*.googlevideo.com` 连接
+- `netflix`: 存在 `*.nflxvideo.net` 连接
+- `prime_video`: 存在 `*.amazonvideo.com` 连接
+- `bilibili_mainland` / `bilibili_hk_mc_tw`: 存在 `*.bilivideo.com` 或 `*.hdslb.com` 连接
+
 ## 配置说明
 
 ### `clash`
@@ -111,6 +122,8 @@ uvx --from git+https://github.com/manfred-exz/clash_auto_switch/ clash-auto-swit
 - `netflix`
 - `disney_plus`
 - `prime_video`
+- `bilibili_mainland`
+- `bilibili_hk_mc_tw`
 
 
 ## Clash 配置参考

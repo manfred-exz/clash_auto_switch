@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Optional
 import httpx
 
 from clash_auto_switch.core.clash_api_raw import ClashClientRaw, ClashLogEntry
-from clash_auto_switch.core.services.registry import connection_host_patterns
+from clash_auto_switch.core.services.registry import get_service
 
 
 @dataclass(frozen=True)
@@ -118,18 +118,45 @@ class ClashApi:
         )
         return sum(1 for result in results if not isinstance(result, httpx.HTTPError))
 
+    async def count_active_service_connections(self, service_name: str) -> int:
+        patterns_config = get_service(service_name).host_patterns
+        if patterns_config is None:
+            return 0
+        patterns = patterns_config.active_connection_hosts
+        if not patterns:
+            return 0
+
+        connections_payload = await self.get_connections()
+        connections = connections_payload.get("connections") or []
+        if not isinstance(connections, list):
+            return 0
+
+        return sum(
+            1
+            for connection in connections
+            if isinstance(connection, dict)
+            and connection_matches_patterns(connection, patterns)
+        )
+
     async def iter_logs(self, level: Optional[str] = None) -> AsyncIterator[ClashLogEntry]:
         async for log_entry in self._client.iter_logs(level=level):
             yield log_entry
 
 
 def connection_matches_service(connection: dict[str, Any], service_name: str) -> bool:
-    patterns = connection_host_patterns(service_name)
+    patterns_config = get_service(service_name).host_patterns
+    if patterns_config is None:
+        return False
+    patterns = patterns_config.connection_match_hosts
     if not patterns:
         return False
 
+    return connection_matches_patterns(connection, patterns)
+
+
+def connection_matches_patterns(connection: dict[str, Any], patterns: tuple[str, ...]) -> bool:
     haystack = " ".join(_connection_search_values(connection)).lower()
-    return any(pattern in haystack for pattern in patterns)
+    return any(pattern.lower() in haystack for pattern in patterns)
 
 
 def _connection_search_values(connection: dict[str, Any]) -> list[str]:
