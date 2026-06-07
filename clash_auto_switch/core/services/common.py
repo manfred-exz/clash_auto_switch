@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
 import html
@@ -83,6 +84,16 @@ def format_result_status(result: TestResultItem) -> str:
 async def check_proxy_connectivity(proxy: Optional[str] = None) -> tuple[bool, str]:
     """Check basic node connectivity before a service-specific probe."""
     async with create_http_client(proxy) as client:
+        try:
+            response = await client.get("https://cp.cloudflare.com/generate_204")
+            if response.status_code in {204, 200}:
+                return True, f"Cloudflare connectivity: HTTP {response.status_code}"
+        except httpx.RequestError as exc:
+            pass
+
+        # retry
+        await asyncio.sleep(1)
+
         try:
             response = await client.get("https://cp.cloudflare.com/generate_204")
             if response.status_code in {204, 200}:

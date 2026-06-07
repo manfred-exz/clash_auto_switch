@@ -78,6 +78,7 @@ active 使用状态判定来自 Clash `/connections`：
 - `netflix`: 存在 `*.nflxvideo.net` 连接
 - `prime_video`: 存在 `*.amazonvideo.com` 连接
 - `bilibili_mainland` / `bilibili_hk_mc_tw`: 存在 `*.bilivideo.com` 或 `*.hdslb.com` 连接
+- `tiktok`: 存在 `*.tiktokv.com` 或 `*.byteoversea.com` 连接
 
 ## 配置说明
 
@@ -124,6 +125,7 @@ active 使用状态判定来自 Clash `/connections`：
 - `prime_video`
 - `bilibili_mainland`
 - `bilibili_hk_mc_tw`
+- `tiktok`
 
 
 ## Clash 配置参考

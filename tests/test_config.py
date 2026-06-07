@@ -40,7 +40,7 @@ class ConfigTest(unittest.TestCase):
 
     def test_service_task_toggle_node_disabled_disables_and_enables(self) -> None:
         task = ProxyServicePair("Youtube", "youtube_music")
-        config = AppConfig(ClashConfig(), MonitoringConfig(), [task])
+        config = AppConfig(ClashConfig(), [task])
         service_task = make_task(config, task)
 
         with patch("clash_auto_switch.core.task.save_app_config", return_value=True):
@@ -51,7 +51,7 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(service_task.disabled_node_names(), set())
 
     def test_add_task_to_config_updates_and_persists_config(self) -> None:
-        config = AppConfig(ClashConfig(), MonitoringConfig(), [])
+        config = AppConfig(ClashConfig(), [])
         task = ProxyServicePair("Youtube", "youtube_music")
 
         with patch("clash_auto_switch.config.save_config", return_value=True) as save:

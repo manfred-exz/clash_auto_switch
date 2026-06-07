@@ -8,6 +8,7 @@ from clash_auto_switch.core.services.youtube_music import (
     summarize_youtube_music_player_statuses,
 )
 from clash_auto_switch.core.services.youtube_premium import parse_youtube_premium_page
+from clash_auto_switch.core.services.tiktok import parse_tiktok_region
 
 
 class ServiceTesterTest(unittest.TestCase):
@@ -41,6 +42,12 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertEqual(get_service("claude").service_name, "claude")
         self.assertEqual(get_service("bilibili_mainland").service_name, "bilibili_mainland")
         self.assertEqual(get_service("bilibili_hk_mc_tw").service_name, "bilibili_hk_mc_tw")
+        self.assertEqual(get_service("tiktok").service_name, "tiktok")
+
+    def test_parse_tiktok_region_page(self) -> None:
+        self.assertEqual(parse_tiktok_region('{"region":"US"}'), "US")
+        self.assertEqual(parse_tiktok_region('some random text "region" : "JP" more text'), "JP")
+        self.assertIsNone(parse_tiktok_region('{"no_region":"US"}'))
 
     def test_parse_youtube_premium_available_page(self) -> None:
         self.assertEqual(
