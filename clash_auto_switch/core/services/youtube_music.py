@@ -364,19 +364,19 @@ async def check_youtube_music(proxy: Optional[str] = None) -> TestResultItem:
                         "search_has_contents": bool(search_response.get("contents")),
                     }
                 )
-            if status == "Yes":
-                status, player_details = await check_youtube_music_playability(
-                    client,
-                    api_key,
-                    context,
-                    visitor_data,
-                )
-                debug["playability"].update(
-                    {
-                        "result": status,
-                        "players": player_details,
-                    }
-                )
+            # if status == "Yes":
+            #     status, player_details = await check_youtube_music_playability(
+            #         client,
+            #         api_key,
+            #         context,
+            #         visitor_data,
+            #     )
+            #     debug["playability"].update(
+            #         {
+            #             "result": status,
+            #             "players": player_details,
+            #         }
+            #     )
         except httpx.HTTPStatusError as e:
             status = f"Failed (HTTP {e.response.status_code})"
             debug["error"] = {"type": type(e).__name__, "message": str(e)}
