@@ -1,4 +1,5 @@
-import asyncio
+from __future__ import annotations
+
 from contextlib import contextmanager
 from contextvars import ContextVar
 import html
@@ -6,7 +7,10 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 import httpx
-from typing import Callable, Dict, Iterator, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Iterator, Optional
+
+if TYPE_CHECKING:
+    from clash_auto_switch.core.clash_api import ClashApi
 
 ServiceDebugEventFunc = Callable[[str, str], None]
 _SERVICE_DEBUG_EVENT_HANDLER: ContextVar[Optional[ServiceDebugEventFunc]] = ContextVar(
@@ -81,26 +85,32 @@ def format_result_status(result: TestResultItem) -> str:
     return f"{result.name}: {result.status}{region}"
 
 
-async def check_proxy_connectivity(proxy: Optional[str] = None) -> tuple[bool, str]:
-    """Check basic node connectivity before a service-specific probe."""
-    async with create_http_client(proxy) as client:
-        try:
-            response = await client.get("https://cp.cloudflare.com/generate_204")
-            if response.status_code in {204, 200}:
-                return True, f"Cloudflare connectivity: HTTP {response.status_code}"
-        except httpx.RequestError as exc:
-            pass
+async def check_proxy_connectivity(
+    clash: ClashApi,
+    node_name: Optional[str],
+    url: str = "https://cp.cloudflare.com/generate_204",
+    timeout_ms: int = 5000,
+) -> tuple[bool, str]:
+    """Check a specific node's connectivity via Clash's get_proxy_delay.
 
-        # retry
-        await asyncio.sleep(1)
+    Unlike probing through the local HTTP proxy (which follows Clash's routing
+    rules and may hit a different node), this targets the named node directly so
+    the result reflects the node actually being tested.
+    """
+    if not node_name:
+        return False, "connectivity failed: no node selected"
 
-        try:
-            response = await client.get("https://cp.cloudflare.com/generate_204")
-            if response.status_code in {204, 200}:
-                return True, f"Cloudflare connectivity: HTTP {response.status_code}"
-            return False, f"Cloudflare connectivity failed: HTTP {response.status_code}"
-        except httpx.RequestError as exc:
-            return False, f"Cloudflare connectivity failed: {str(exc)[:80]}"
+    try:
+        result = await clash.get_proxy_delay(node_name, url, timeout_ms)
+    except httpx.HTTPError as exc:
+        return False, f"connectivity failed: {str(exc)[:80]}"
+
+    delay = result.get("delay")
+    if isinstance(delay, (int, float)) and delay >= 0:
+        return True, f"connectivity ok: delay {delay}ms"
+
+    message = result.get("message") or result
+    return False, f"connectivity failed: {message}"
 
 
 def parse_trace_country(body: str) -> Optional[str]:

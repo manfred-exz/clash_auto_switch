@@ -229,7 +229,8 @@ class ServiceTask:
         current_node = await self.current_node()
 
         connectivity_ok, connectivity_status = await check_proxy_connectivity(
-            self.app.config.clash.http_proxy,
+            self.app.clash,
+            current_node,
         )
         if not connectivity_ok:
             node_display = current_node if current_node else "未知"
@@ -312,7 +313,8 @@ class ServiceTask:
         current_node = await self.current_node()
 
         connectivity_ok, connectivity_status = await check_proxy_connectivity(
-            self.app.config.clash.http_proxy,
+            self.app.clash,
+            current_node,
         )
         if not connectivity_ok:
             node_display = current_node if current_node else "未知"

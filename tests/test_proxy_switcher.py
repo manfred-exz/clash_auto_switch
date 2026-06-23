@@ -120,7 +120,7 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         async def fake_probe(_service_name: str, _proxy_url: str | None) -> tuple[bool, str]:
             return next(probe_results)
 
-        async def fake_connectivity(_proxy_url: str | None) -> tuple[bool, str]:
+        async def fake_connectivity(_clash, _node_name) -> tuple[bool, str]:
             return True, "ok"
 
         async def after_switch(node_name: str) -> None:
@@ -143,8 +143,8 @@ class ProxySwitcherTest(unittest.IsolatedAsyncioTestCase):
         client = StatefulFakeClashClient()
         storage = FakeStorage()
 
-        async def fake_connectivity(_proxy_url: str | None) -> tuple[bool, str]:
-            return False, "Cloudflare connectivity failed"
+        async def fake_connectivity(_clash, _node_name) -> tuple[bool, str]:
+            return False, "connectivity failed"
 
         probe = AsyncMock(return_value=(True, "Yes"))
         with patch("clash_auto_switch.core.task.probe_service", probe), patch(
