@@ -116,6 +116,7 @@ active 使用状态判定来自 Clash `/connections`：
 
 - `chatgpt`
 - `claude`
+- `common_services`
 - `gemini`
 - `youtube_premium`
 - `youtube_music`

@@ -35,6 +35,8 @@ class NodeScore:
     total_checks: int = 0
     successful_checks: int = 0
     disabled: bool = False
+    connectivity_ok: Optional[bool] = None
+    connectivity_score: Optional[float] = None
 
     @property
     def success_rate(self) -> float:
@@ -247,6 +249,7 @@ class MonitorTui(App[None]):
         self._ui_ready = False
         self._events_maximized = False
         self._last_refresh_time: Optional[datetime] = None
+        self._connectivity_by_service: dict[str, dict[str, bool]] = {}
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main"):
@@ -265,7 +268,7 @@ class MonitorTui(App[None]):
         self._ui_ready = True
         for service in self._services.values():
             table = self._service_table(service)
-            table.add_columns("节点", "得分", "成功率")
+            table.add_columns("节点", "得分", "连通", "成功率")
             table.cursor_type = "row"
             table.zebra_stripes = True
 
@@ -334,6 +337,7 @@ class MonitorTui(App[None]):
             storage=storage,
             disabled_node_names=disabled_node_names or set(),
         )
+        self._apply_connectivity(service)
         if service.nodes:
             service.selected_node_index = min(service.selected_node_index, len(service.nodes) - 1)
         else:
@@ -342,6 +346,27 @@ class MonitorTui(App[None]):
         self._render_service(service)
         if self._is_selected_service(service):
             self._render_connections()
+
+    def update_connectivity(
+        self,
+        task: ServiceTaskRef,
+        node_status: dict[str, bool],
+    ) -> None:
+        """Merge connectivity results into cached state and re-render affected service."""
+        service = self._services.get(task.service_name)
+        if service is None:
+            return
+        self._connectivity_by_service[task.service_name] = dict(node_status)
+        self._apply_connectivity(service)
+        self._render_service(service)
+
+    def _apply_connectivity(self, service: ServiceView) -> None:
+        status_map = self._connectivity_by_service.get(service.task.service_name)
+        if not status_map:
+            return
+        for node in service.nodes:
+            if node.name in status_map:
+                node.connectivity_ok = status_map[node.name]
 
     def update_connections(
         self,
@@ -390,7 +415,7 @@ class MonitorTui(App[None]):
                 id=self._service_table_ids[task.service_name],
                 classes="service-table",
             )
-            table.add_columns("节点", "得分", "成功率")
+            table.add_columns("节点", "得分", "连通", "成功率")
             table.cursor_type = "row"
             table.zebra_stripes = True
             await self.query_one("#services").mount(table)
@@ -589,22 +614,28 @@ class MonitorTui(App[None]):
         table.set_class(self._is_selected_service(service), "selected")
 
         if not service.nodes:
-            signature = (("等待读取 ProxyGroup 节点", "-", "-", False, False),)
+            signature = (("等待读取 ProxyGroup 节点", "-", "-", "-", False, False, "unknown"),)
             if service.rendered_node_signature != signature:
                 table.clear()
-                table.add_row("等待读取 ProxyGroup 节点", "-", "-")
+                table.add_row("等待读取 ProxyGroup 节点", "-", "-", "-")
                 service.rendered_node_signature = signature
             return
 
         signature = _node_table_signature(service.nodes, service.current_node)
         if service.rendered_node_signature != signature:
             table.clear()
-            for index, (node_name, score, success_rate, is_current, is_disabled) in enumerate(signature):
-                current_marker = "* " if is_current else "  "
+            for index, (node_name, score, conn_score, success_rate, is_current, is_disabled, connectivity_state) in enumerate(signature):
+                if is_current:
+                    prefix = "* "
+                elif connectivity_state == "fail":
+                    prefix = "! "
+                else:
+                    prefix = "  "
                 disabled_marker = " [禁用]" if is_disabled else ""
                 table.add_row(
-                    f"{current_marker}{node_name}{disabled_marker}",
+                    f"{prefix}{node_name}{disabled_marker}",
                     score,
+                    conn_score,
                     success_rate,
                     key=str(index),
                 )
@@ -688,11 +719,13 @@ def build_node_scores(
     disabled_node_names = disabled_node_names or set()
     for node in nodes:
         record = storage.get_node_service_record(node, service_name, proxy_group_name)
+        connectivity = storage.get_node_connectivity(node)
         scored_nodes.append(
             _node_score_from_record(
                 node,
                 record,
                 disabled=node in disabled_node_names,
+                connectivity_score=connectivity.score if connectivity else None,
             )
         )
 
@@ -724,17 +757,25 @@ def build_connection_rows(
 def _node_table_signature(
     nodes: list[NodeScore],
     current_node: Optional[str],
-) -> tuple[tuple[str, str, str, bool, bool], ...]:
+) -> tuple[tuple[str, str, str, str, bool, bool, str], ...]:
     return tuple(
         (
             node.name,
             f"{node.score:.3f}",
+            f"{node.connectivity_score:.2f}" if node.connectivity_score is not None else "-",
             f"{node.success_rate:.0%}" if node.total_checks else "-",
             node.name == current_node,
             node.disabled,
+            _connectivity_state(node.connectivity_ok),
         )
         for node in nodes
     )
+
+
+def _connectivity_state(value: Optional[bool]) -> str:
+    if value is None:
+        return "unknown"
+    return "ok" if value else "fail"
 
 
 def _node_score_from_record(
@@ -742,9 +783,10 @@ def _node_score_from_record(
     record: Optional[ServiceRecord],
     *,
     disabled: bool = False,
+    connectivity_score: Optional[float] = None,
 ) -> NodeScore:
     if record is None:
-        return NodeScore(name=node, disabled=disabled)
+        return NodeScore(name=node, disabled=disabled, connectivity_score=connectivity_score)
 
     return NodeScore(
         name=node,
@@ -753,6 +795,7 @@ def _node_score_from_record(
         total_checks=record.total_checks,
         successful_checks=record.successful_checks,
         disabled=disabled,
+        connectivity_score=connectivity_score,
     )
 
 

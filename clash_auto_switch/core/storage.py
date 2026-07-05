@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import threading
 from dataclasses import fields
 
-from clash_auto_switch.defs import ServiceRecord
+from clash_auto_switch.defs import NodeConnectivityRecord, ServiceRecord
 from clash_auto_switch.project import get_data_file_path
 
 
@@ -22,6 +22,8 @@ class NodeHistoryStorage:
 
         # New storage format: {node_name: [ServiceRecord, ...]}
         self._records_by_node: Dict[str, List[ServiceRecord]] = {}
+        # Node-level connectivity score keyed by node name.
+        self._connectivity_records: Dict[str, NodeConnectivityRecord] = {}
         self._load_initial_data()
 
     def get_records_by_node(
@@ -89,37 +91,64 @@ class NodeHistoryStorage:
         try:
             with open(self._data_file, 'r', encoding='utf-8') as f:
                 file_data = json.load(f)
-
-            # Load both the new format:
-            #   {node_name: [ServiceRecord, ...]}
-            # and the legacy format:
-            #   {"proxy_group#service": [{"node_name": "...", ...}, ...]}
-            for bucket_name, service_records in file_data.items():
-                if not isinstance(service_records, list):
-                    continue
-                for record_dict in service_records:
-                    if not isinstance(record_dict, dict):
-                        continue
-
-                    try:
-                        node_name = record_dict.get("node_name") or bucket_name
-                        record = self._record_from_dict(record_dict)
-                        self._records_by_node.setdefault(node_name, []).append(record)
-                    except (TypeError, ValueError):
-                        # Skip malformed records
-                        continue
-
         except (json.JSONDecodeError, IOError):
             # If file is corrupted, start fresh
             self._records_by_node = {}
+            return
+
+        self._load_service_records(file_data)
+        self._load_connectivity_records(file_data)
+
+    def _load_service_records(self, file_data: Dict) -> None:
+        """Load service records from new or legacy file format."""
+        # New format: {"service_records": {node_name: [ServiceRecord, ...]}}
+        if isinstance(file_data.get("service_records"), dict):
+            buckets = file_data["service_records"]
+        else:
+            # Legacy format: top-level dict is {node_name: [ServiceRecord, ...]}
+            buckets = file_data
+
+        for bucket_name, service_records in buckets.items():
+            if not isinstance(service_records, list):
+                continue
+            for record_dict in service_records:
+                if not isinstance(record_dict, dict):
+                    continue
+
+                try:
+                    node_name = record_dict.get("node_name") or bucket_name
+                    record = self._record_from_dict(record_dict)
+                    self._records_by_node.setdefault(node_name, []).append(record)
+                except (TypeError, ValueError):
+                    # Skip malformed records
+                    continue
+
+    def _load_connectivity_records(self, file_data: Dict) -> None:
+        """Load node connectivity records from new file format."""
+        connectivity_data = file_data.get("connectivity_records")
+        if not isinstance(connectivity_data, dict):
+            return
+        for node_name, record_dict in connectivity_data.items():
+            if not isinstance(record_dict, dict):
+                continue
+            try:
+                self._connectivity_records[node_name] = NodeConnectivityRecord.from_dict(record_dict)
+            except (TypeError, ValueError):
+                continue
 
     def _save_to_file(self):
         """Save current memory data to file."""
         try:
-            # Convert to file format
-            file_data = {}
-            for node_name, service_records in self._records_by_node.items():
-                file_data[node_name] = [record.to_dict() for record in service_records]
+            file_data = {
+                "service_records": {
+                    node_name: [record.to_dict() for record in service_records]
+                    for node_name, service_records in self._records_by_node.items()
+                },
+                "connectivity_records": {
+                    node_name: record.to_dict()
+                    for node_name, record in self._connectivity_records.items()
+                },
+            }
 
             with open(self._data_file, 'w', encoding='utf-8') as f:
                 json.dump(file_data, f, indent=2, ensure_ascii=False)
@@ -225,6 +254,35 @@ class NodeHistoryStorage:
                     return record
             return None
 
+    def record_node_connectivity(self, node_name: str, is_ok: bool) -> None:
+        """Record a node-level connectivity check result and update its score."""
+        with self._lock:
+            record = self._connectivity_records.get(node_name)
+            if record is None:
+                record = NodeConnectivityRecord(
+                    score=1.0 if is_ok else 0.1,
+                    total_checks=1,
+                    successful_checks=1 if is_ok else 0,
+                    last_check_time=time.time(),
+                )
+                self._connectivity_records[node_name] = record
+            else:
+                record.last_check_time = time.time()
+                record.total_checks += 1
+                if is_ok:
+                    record.successful_checks += 1
+                record.score = self._calculate_reliability_score(
+                    record.score,
+                    record.total_checks - 1,
+                    is_ok,
+                )
+            self._save_to_file()
+
+    def get_node_connectivity(self, node_name: str) -> Optional[NodeConnectivityRecord]:
+        """Get the connectivity record for a specific node."""
+        with self._lock:
+            return self._connectivity_records.get(node_name)
+
     def export_data(self, output_file: Optional[str] = None) -> str:
         """Export all data to a JSON file for backup/analysis."""
         with self._lock:
@@ -234,10 +292,16 @@ class NodeHistoryStorage:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 output_file = f"clash_auto_switch_export_{timestamp}.json"
 
-            # Convert to file format for export
-            export_data = {}
-            for node_name, service_records in self._records_by_node.items():
-                export_data[node_name] = [record.to_dict() for record in service_records]
+            export_data = {
+                "service_records": {
+                    node_name: [record.to_dict() for record in service_records]
+                    for node_name, service_records in self._records_by_node.items()
+                },
+                "connectivity_records": {
+                    node_name: record.to_dict()
+                    for node_name, record in self._connectivity_records.items()
+                },
+            }
 
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)

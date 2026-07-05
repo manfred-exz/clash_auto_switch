@@ -40,6 +40,7 @@ class ServiceTesterTest(unittest.TestCase):
     def test_service_checker_registration_defaults(self) -> None:
         self.assertEqual(get_service("chatgpt").service_name, "chatgpt")
         self.assertEqual(get_service("claude").service_name, "claude")
+        self.assertEqual(get_service("common_services").service_name, "common_services")
         self.assertEqual(get_service("bilibili_mainland").service_name, "bilibili_mainland")
         self.assertEqual(get_service("bilibili_hk_mc_tw").service_name, "bilibili_hk_mc_tw")
         self.assertEqual(get_service("tiktok").service_name, "tiktok")

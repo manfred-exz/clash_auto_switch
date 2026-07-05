@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
 import html
@@ -85,32 +86,44 @@ def format_result_status(result: TestResultItem) -> str:
     return f"{result.name}: {result.status}{region}"
 
 
+CONNECTIVITY_MAX_ATTEMPTS = 3
+CONNECTIVITY_RETRY_DELAY_SEC = 1.0
+
+
 async def check_proxy_connectivity(
     clash: ClashApi,
     node_name: Optional[str],
     url: str = "https://cp.cloudflare.com/generate_204",
     timeout_ms: int = 5000,
+    max_attempts: int = CONNECTIVITY_MAX_ATTEMPTS,
 ) -> tuple[bool, str]:
     """Check a specific node's connectivity via Clash's get_proxy_delay.
 
     Unlike probing through the local HTTP proxy (which follows Clash's routing
     rules and may hit a different node), this targets the named node directly so
-    the result reflects the node actually being tested.
+    the result reflects the node actually being tested. Retries on failure to
+    avoid switching away from nodes with transient connectivity blips.
     """
     if not node_name:
         return False, "connectivity failed: no node selected"
 
-    try:
-        result = await clash.get_proxy_delay(node_name, url, timeout_ms)
-    except httpx.HTTPError as exc:
-        return False, f"connectivity failed: {str(exc)[:80]}"
+    last_message = "connectivity failed: no attempts"
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await clash.get_proxy_delay(node_name, url, timeout_ms)
+        except httpx.HTTPError as exc:
+            last_message = f"connectivity failed: {str(exc)[:80]}"
+        else:
+            delay = result.get("delay")
+            if isinstance(delay, (int, float)) and delay >= 0:
+                suffix = f" (尝试 {attempt}/{max_attempts})" if attempt > 1 else ""
+                return True, f"connectivity ok: delay {delay}ms{suffix}"
+            last_message = f"connectivity failed: {result.get('message') or result}"
 
-    delay = result.get("delay")
-    if isinstance(delay, (int, float)) and delay >= 0:
-        return True, f"connectivity ok: delay {delay}ms"
+        if attempt < max_attempts:
+            await asyncio.sleep(CONNECTIVITY_RETRY_DELAY_SEC)
 
-    message = result.get("message") or result
-    return False, f"connectivity failed: {message}"
+    return False, f"{last_message} (尝试 {max_attempts}/{max_attempts})"
 
 
 def parse_trace_country(body: str) -> Optional[str]:

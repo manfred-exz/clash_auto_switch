@@ -25,12 +25,18 @@ UNTESTED_NODE_SCORE = 0.5
 @dataclass(frozen=True)
 class ProxyCandidate:
     name: str
-    score: float
+    score: float = 0.0
     status: str = "untested"
     total_checks: int = 0
     successful_checks: int = 0
     is_current: bool = False
     is_alive: bool = True
+    connectivity_score: float = 1.0
+
+    @property
+    def combined_score(self) -> float:
+        """Service score weighted by node connectivity score."""
+        return self.score * self.connectivity_score
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,9 @@ class ServiceTask:
             if not is_alive or candidate in disabled_node_names:
                 continue
 
+            connectivity = self.app.storage.get_node_connectivity(candidate)
+            connectivity_score = connectivity.score if connectivity else 1.0
+
             record = self.app.storage.get_node_service_record(
                 candidate,
                 self.service_name,
@@ -109,6 +118,7 @@ class ServiceTask:
                         score=UNTESTED_NODE_SCORE,
                         is_current=candidate == current,
                         is_alive=True,
+                        connectivity_score=connectivity_score,
                     )
                 )
                 continue
@@ -122,12 +132,13 @@ class ServiceTask:
                     successful_checks=record.successful_checks,
                     is_current=candidate == current,
                     is_alive=True,
+                    connectivity_score=connectivity_score,
                 )
             )
 
         return sorted(
             switch_candidates,
-            key=lambda candidate: (-candidate.score, candidate.is_current, candidate.name),
+            key=lambda candidate: (-candidate.combined_score, candidate.is_current, candidate.name),
         )
 
     async def switch_to_next_ranked_proxy(
@@ -232,6 +243,8 @@ class ServiceTask:
             self.app.clash,
             current_node,
         )
+        if isinstance(current_node, str) and current_node:
+            self.app.storage.record_node_connectivity(current_node, connectivity_ok)
         if not connectivity_ok:
             node_display = current_node if current_node else "未知"
             if event_handler is not None:
@@ -316,6 +329,8 @@ class ServiceTask:
             self.app.clash,
             current_node,
         )
+        if isinstance(current_node, str) and current_node:
+            self.app.storage.record_node_connectivity(current_node, connectivity_ok)
         if not connectivity_ok:
             node_display = current_node if current_node else "未知"
             if event_handler is not None:

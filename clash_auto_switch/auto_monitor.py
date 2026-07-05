@@ -17,6 +17,9 @@ from clash_auto_switch.tui import MonitorTui
 
 LOG_RECONNECT_DELAY_SEC = 3.0
 TUI_REFRESH_INTERVAL_SEC = 5.0
+CONNECTIVITY_REFRESH_INTERVAL_SEC = 300.0
+CONNECTIVITY_TEST_URL = "https://cp.cloudflare.com/generate_204"
+CONNECTIVITY_TEST_TIMEOUT_MS = 5000
 SELF_TRIGGER_PROCESSES = {"python.exe", "pythonw.exe"}
 
 
@@ -89,6 +92,7 @@ class AutoMonitorRunner:
                 for task in self.tasks:
                     self.tui.set_auto_detection_enabled(task, task.auto_detection_enabled)
                 await self.refresh_all_services()
+                await self.refresh_all_connectivity()
                 await self.run_background_tasks()
             finally:
                 self.app.clear_clash()
@@ -117,6 +121,7 @@ class AutoMonitorRunner:
             asyncio.create_task(self.tui.run_async(), name="tui"),
             asyncio.create_task(self.consume_logs(), name="auto_log_consumer"),
             asyncio.create_task(self.refresh_loop(), name="tui_refresh"),
+            asyncio.create_task(self.connectivity_refresh_loop(), name="connectivity_refresh"),
         ]
         pending = set()
         try:
@@ -331,6 +336,97 @@ class AutoMonitorRunner:
         for task in self.tasks:
             await self.update_tui_service(task)
         await self.update_tui_connections_if_selected()
+
+    async def connectivity_refresh_loop(self) -> None:
+        await asyncio.sleep(CONNECTIVITY_REFRESH_INTERVAL_SEC)
+        while True:
+            await self.refresh_all_connectivity()
+            await asyncio.sleep(CONNECTIVITY_REFRESH_INTERVAL_SEC)
+
+    async def refresh_all_connectivity(self) -> None:
+        clash = self.app.clash
+        task_nodes, unique_nodes = await self._collect_task_nodes(clash)
+        if not unique_nodes:
+            return
+        node_status = await self._probe_nodes_connectivity(clash, unique_nodes)
+        self._dispatch_connectivity(task_nodes, node_status)
+
+    async def _collect_task_nodes(
+        self,
+        clash: ClashApi,
+    ) -> tuple[dict[str, list[str]], list[str]]:
+        """Fetch each unique proxy group once and return per-task node lists plus deduped nodes."""
+        unique_groups = {task.proxy_group_name for task in self.tasks}
+        group_results = await asyncio.gather(
+            *(clash.get_proxy_group(name) for name in unique_groups),
+            return_exceptions=True,
+        )
+        group_nodes: dict[str, list[str]] = {}
+        for name, result in zip(unique_groups, group_results):
+            if isinstance(result, Exception):
+                self.event("system", f"连通性刷新跳过 | 读取代理组失败 {name}: {result}", level="warning")
+                continue
+            group_nodes[name] = result.nodes
+
+        task_nodes: dict[str, list[str]] = {}
+        seen: set[str] = set()
+        unique_nodes: list[str] = []
+        for task in self.tasks:
+            nodes = group_nodes.get(task.proxy_group_name)
+            if nodes is None:
+                continue
+            task_nodes[task.service_name] = nodes
+            for name in nodes:
+                if name not in seen:
+                    seen.add(name)
+                    unique_nodes.append(name)
+        return task_nodes, unique_nodes
+
+    def _dispatch_connectivity(
+        self,
+        task_nodes: dict[str, list[str]],
+        node_status: dict[str, bool],
+    ) -> None:
+        for node_name, ok in node_status.items():
+            self.storage.record_node_connectivity(node_name, ok)
+        for task in self.tasks:
+            nodes = task_nodes.get(task.service_name)
+            if nodes is None:
+                continue
+            task_status = {name: node_status[name] for name in nodes if name in node_status}
+            self.tui.update_connectivity(task, task_status)
+            failed = sum(1 for ok in task_status.values() if not ok)
+            if failed:
+                self.event(
+                    task.service_name,
+                    f"连通性刷新 | {len(task_status) - failed}/{len(task_status)} 正常, {failed} 失败",
+                )
+
+    async def _probe_nodes_connectivity(
+        self,
+        clash: ClashApi,
+        nodes: list[str],
+    ) -> dict[str, bool]:
+        results = await asyncio.gather(
+            *(self._probe_single_node(clash, name) for name in nodes),
+            return_exceptions=True,
+        )
+        status: dict[str, bool] = {}
+        for name, result in zip(nodes, results):
+            status[name] = False if isinstance(result, Exception) else result
+        return status
+
+    async def _probe_single_node(self, clash: ClashApi, name: str) -> bool:
+        try:
+            result = await clash.get_proxy_delay(
+                name,
+                CONNECTIVITY_TEST_URL,
+                CONNECTIVITY_TEST_TIMEOUT_MS,
+            )
+        except httpx.HTTPError:
+            return False
+        delay = result.get("delay")
+        return isinstance(delay, (int, float)) and delay >= 0
 
     async def update_tui_service(self, task: ServiceTaskRuntime) -> None:
         clash = self.app.clash

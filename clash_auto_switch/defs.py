@@ -70,3 +70,19 @@ class ServiceRecord:
     @classmethod
     def from_dict(cls, data: Dict) -> "ServiceRecord":
         return cls(**data)
+
+
+@dataclass
+class NodeConnectivityRecord:
+    """Node-level connectivity score, shared across services using the same node."""
+    score: float = 1.0  # 0.0 to 1.0, defaults optimistic
+    total_checks: int = 0
+    successful_checks: int = 0
+    last_check_time: float = 0.0
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "NodeConnectivityRecord":
+        return cls(**data)

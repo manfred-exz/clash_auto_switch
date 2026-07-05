@@ -21,6 +21,12 @@ class FakeStorage:
     ) -> ServiceRecord | None:
         return None
 
+    def get_node_connectivity(self, _node: str):
+        return None
+
+    def record_node_connectivity(self, _node: str, _is_ok: bool) -> None:
+        pass
+
     def record_node_status(
         self,
         node_name: str,
@@ -33,6 +39,12 @@ class FakeStorage:
 class FakeLowScoreStorage:
     def get_records_by_node(self, _node: str, _proxy_group: str) -> list:
         return []
+
+    def get_node_connectivity(self, _node: str):
+        return None
+
+    def record_node_connectivity(self, _node: str, _is_ok: bool) -> None:
+        pass
 
     def get_node_service_record(
         self,
