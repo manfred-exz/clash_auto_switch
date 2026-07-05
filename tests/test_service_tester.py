@@ -1,5 +1,7 @@
 import unittest
 
+from clash_auto_switch.auto_monitor import match_auto_trigger_service
+from clash_auto_switch.core.clash_api_raw import ClashLogEntry
 from clash_auto_switch.core.services.registry import get_service
 from clash_auto_switch.core.services.youtube_music import (
     parse_youtube_music_api_response,
@@ -44,6 +46,16 @@ class ServiceTesterTest(unittest.TestCase):
         self.assertEqual(get_service("bilibili_mainland").service_name, "bilibili_mainland")
         self.assertEqual(get_service("bilibili_hk_mc_tw").service_name, "bilibili_hk_mc_tw")
         self.assertEqual(get_service("tiktok").service_name, "tiktok")
+
+    def test_common_services_uses_periodic_strategy(self) -> None:
+        service = get_service("common_services")
+
+        self.assertEqual(service.trigger_mode, "periodic")
+        self.assertFalse(service.close_connections_on_switch)
+        self.assertEqual(
+            match_auto_trigger_service(ClashLogEntry(type="info", payload="github.com")),
+            None,
+        )
 
     def test_parse_tiktok_region_page(self) -> None:
         self.assertEqual(parse_tiktok_region('{"region":"US"}'), "US")

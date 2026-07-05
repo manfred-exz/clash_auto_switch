@@ -14,6 +14,7 @@ from clash_auto_switch.core.services.common import (
     service_debug_event_handler,
 )
 from clash_auto_switch.core.services.probe import probe_service
+from clash_auto_switch.core.services.registry import get_service
 from clash_auto_switch.defs import DisabledNode
 from clash_auto_switch.defs import ProxyServicePair
 
@@ -220,6 +221,9 @@ class ServiceTask:
         self,
         event_handler: Optional[EventFunc] = None,
     ) -> int:
+        if not get_service(self.service_name).close_connections_on_switch:
+            return 0
+
         clash = self.app.clash
         try:
             closed_count = await clash.close_service_connections(self.service_name)

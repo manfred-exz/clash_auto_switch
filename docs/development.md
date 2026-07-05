@@ -116,6 +116,10 @@ Patterns are substring matches against the parsed destination host and raw log p
 - `extra_connection_hosts`: hosts shown in the TUI connection panel and closed after switching.
 - `active_connection_hosts`: hosts that mean the service is currently being used successfully; if any active connection exists, auto detection is skipped.
 
+Most services use `trigger_mode = "traffic"` and are checked only after matching realtime Clash logs. Set `trigger_mode = "periodic"` only for health checks that should run on a timer rather than a user traffic trigger. Periodic services can set `close_connections_on_switch = False` when switching nodes should not interrupt existing connections.
+
+`common_services` is a periodic health checker for default proxy selection. It checks GitHub and Google connectivity, does not participate in log-trigger matching, and does not close connections after switching.
+
 Active connection checks are conservative. Add `active_connection_hosts` only for traffic that strongly indicates playback or service use, not ordinary page/API bootstrap traffic. Current active signals include:
 
 - `youtube_music`: `googlevideo.com`

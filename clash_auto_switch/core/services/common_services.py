@@ -38,8 +38,11 @@ async def check_common_services(proxy: Optional[str] = None) -> TestResultItem:
 
 class CommonServicesChecker(ServiceChecker):
     service_name = "common_services"
+    trigger_mode = "periodic"
+    close_connections_on_switch = False
+    periodic_interval_sec = 60.0
     host_patterns = ServiceHostPatterns(
-        trigger_hosts=("github.com", "google.com"),
+        trigger_hosts=(),
         extra_connection_hosts=("github.com", "githubusercontent.com", "google.com", "gstatic.com"),
     )
 

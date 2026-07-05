@@ -1,4 +1,6 @@
 import asyncio
+import math
+import time
 from contextlib import suppress
 from typing import Optional
 
@@ -20,6 +22,7 @@ TUI_REFRESH_INTERVAL_SEC = 5.0
 CONNECTIVITY_REFRESH_INTERVAL_SEC = 300.0
 CONNECTIVITY_TEST_URL = "https://cp.cloudflare.com/generate_204"
 CONNECTIVITY_TEST_TIMEOUT_MS = 5000
+PERIODIC_CHECK_IDLE_DELAY_SEC = 5.0
 SELF_TRIGGER_PROCESSES = {"python.exe", "pythonw.exe"}
 
 
@@ -36,6 +39,8 @@ def match_auto_trigger_service(log_entry: ClashLogEntry) -> Optional[str]:
 
     haystack = " ".join(value for value in candidates if value).lower()
     for service in get_all_services():
+        if service.trigger_mode != "traffic":
+            continue
         patterns = service.host_patterns
         if patterns is None:
             continue
@@ -55,6 +60,7 @@ class AutoMonitorRunner:
         self._validate_configured_tasks()
         self.tui = MonitorTui(self.tasks)
         self.diagnostics = self.app.diagnostics
+        self._periodic_next_check_at: dict[str, float] = {}
 
     def _validate_configured_tasks(self) -> None:
         missing_services = []
@@ -120,6 +126,7 @@ class AutoMonitorRunner:
         tasks = [
             asyncio.create_task(self.tui.run_async(), name="tui"),
             asyncio.create_task(self.consume_logs(), name="auto_log_consumer"),
+            asyncio.create_task(self.periodic_service_check_loop(), name="periodic_service_check"),
             asyncio.create_task(self.refresh_loop(), name="tui_refresh"),
             asyncio.create_task(self.connectivity_refresh_loop(), name="connectivity_refresh"),
         ]
@@ -194,6 +201,61 @@ class AutoMonitorRunner:
         )
         task.track_running_check(asyncio.create_task(self.check_and_switch_service(task)))
 
+    async def periodic_service_check_loop(self) -> None:
+        while True:
+            now = time.monotonic()
+            periodic_tasks = [
+                task
+                for task in self.tasks
+                if get_service(task.service_name).trigger_mode == "periodic"
+            ]
+            if not periodic_tasks:
+                await asyncio.sleep(PERIODIC_CHECK_IDLE_DELAY_SEC)
+                continue
+
+            next_due_in = math.inf
+            for task in periodic_tasks:
+                next_check_at = self._periodic_next_check_at.get(task.service_name, 0.0)
+                if now < next_check_at:
+                    next_due_in = min(next_due_in, max(next_check_at - now, 0.0))
+                    continue
+
+                await self.maybe_run_periodic_service_check(task)
+                interval = max(
+                    get_service(task.service_name).periodic_interval_sec,
+                    PERIODIC_CHECK_IDLE_DELAY_SEC,
+                )
+                self._periodic_next_check_at[task.service_name] = time.monotonic() + interval
+                next_due_in = min(next_due_in, interval)
+            await asyncio.sleep(
+                PERIODIC_CHECK_IDLE_DELAY_SEC
+                if math.isinf(next_due_in)
+                else max(next_due_in, PERIODIC_CHECK_IDLE_DELAY_SEC)
+            )
+
+    async def maybe_run_periodic_service_check(self, task: ServiceTaskRuntime) -> None:
+        if not task.auto_detection_enabled:
+            return
+        if task.is_check_running:
+            self.event(task.service_name, "跳过定时检测 | 上次检测仍在运行")
+            self.diagnostics.write(
+                "periodic_check_skipped",
+                service_name=task.service_name,
+                proxy_group_name=task.proxy_group_name,
+                reason="check_already_running",
+            )
+            return
+
+        current_node = await self.current_node_for_task(task)
+        self.event(task.service_name, f"定时检测 | 当前节点: {current_node or '未知'}")
+        self.diagnostics.write(
+            "periodic_check",
+            service_name=task.service_name,
+            proxy_group_name=task.proxy_group_name,
+            current_node=current_node,
+        )
+        task.track_running_check(asyncio.create_task(self.check_and_switch_service(task)))
+
     async def tui_check_service(self, task: ServiceTaskRuntime) -> None:
         if task.is_check_running:
             self.event(task.service_name, "手动检测已跳过 | 自动检测仍在运行")
@@ -207,10 +269,13 @@ class AutoMonitorRunner:
         *,
         force: bool = False,
     ) -> None:
+        service = get_service(task.service_name)
+
         async def after_switch(_node_name: str) -> None:
             await task.close_connections_best_effort(self.event)
             await self.update_tui_service(task)
-            await self.update_tui_connections_if_selected()
+            if service.close_connections_on_switch:
+                await self.update_tui_connections_if_selected()
 
         before_node = await self.current_node_for_task(task)
         self.diagnostics.write(

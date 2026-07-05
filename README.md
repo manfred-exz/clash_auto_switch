@@ -72,6 +72,8 @@ uvx --from git+https://github.com/manfred-exz/clash_auto_switch/ clash-auto-swit
 
 自动检测不再使用自适应频率间隔。只要命中服务日志且服务没有处于 active 使用状态，就会触发检测；手动检测不受 active 判定影响。
 
+`common_services` 是基础连通性检测，用于默认代理选择。它不依赖 Clash 连接日志触发，而是定时检测 GitHub 和 Google；检测失败时主动切换节点。切换时不会关闭 GitHub/Google 相关连接。
+
 active 使用状态判定来自 Clash `/connections`：
 
 - `youtube_music`: 存在 `*.googlevideo.com` 连接

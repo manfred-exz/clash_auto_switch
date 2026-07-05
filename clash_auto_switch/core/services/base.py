@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Literal, Optional, Protocol
 
 
 class ServiceCheckResult(Protocol):
@@ -28,7 +28,10 @@ class ServiceChecker(ABC):
     """Base class for one service availability checker."""
 
     service_name: str
-    host_patterns: ServiceHostPatterns
+    host_patterns: Optional[ServiceHostPatterns] = None
+    trigger_mode: Literal["traffic", "periodic"] = "traffic"
+    close_connections_on_switch: bool = True
+    periodic_interval_sec: float = 60.0
 
     @abstractmethod
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:
