@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from clash_auto_switch.project import get_data_directory
+
+_MAX_BYTES = 50 * 1024 * 1024
 
 
 class DiagnosticLogger:
@@ -13,6 +16,27 @@ class DiagnosticLogger:
 
     def __init__(self, filename: str = "diagnostics.jsonl") -> None:
         self.path = get_data_directory() / filename
+
+    def _trim(self) -> None:
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        if size < _MAX_BYTES:
+            return
+        try:
+            lines = self.path.read_text("utf-8").splitlines(keepends=True)
+            tail: deque[str] = deque()
+            tail_size = 0
+            for line in reversed(lines):
+                tail.appendleft(line)
+                tail_size += len(line)
+                if tail_size >= _MAX_BYTES // 2:
+                    break
+            if tail_size < size:
+                self.path.write_text("".join(tail), "utf-8")
+        except OSError:
+            pass
 
     def write(
         self,
@@ -24,6 +48,7 @@ class DiagnosticLogger:
     ) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._trim()
             payload = {
                 "time": datetime.now().isoformat(timespec="seconds"),
                 "kind": kind,

@@ -123,8 +123,13 @@ Most services use `trigger_mode = "traffic"` and are checked only after matching
 Active connection checks are conservative. Add `active_connection_hosts` only for traffic that strongly indicates playback or service use, not ordinary page/API bootstrap traffic. Current active signals include:
 
 - `youtube_music`: `googlevideo.com`
+- `youtube_premium`: `googlevideo.com`
 - `netflix`: `nflxvideo.net`
 - `prime_video`: `amazonvideo.com`
+- `chatgpt`: `chat.openai.com`, `chatgpt.com`, `api.openai.com`
+- `claude`: `claude.ai`
+- `gemini`: `gemini.google.com`
+- `disney_plus`: `dssott.com`
 - `bilibili_mainland` / `bilibili_hk_mc_tw`: `bilivideo.com`, `hdslb.com`
 
 Auto mode no longer uses `AdaptiveCheckScheduler` for trigger throttling. The scheduler code remains in the tree for now, but `AutoMonitorRunner` should not call it in the default auto-trigger path.

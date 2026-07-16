@@ -31,7 +31,10 @@ async def check_claude(proxy: Optional[str] = None) -> TestResultItem:
 
 class ClaudeChecker(ServiceChecker):
     service_name = "claude"
-    host_patterns = ServiceHostPatterns(trigger_hosts=("claude.ai", "anthropic.com"))
+    host_patterns = ServiceHostPatterns(
+        trigger_hosts=("claude.ai", "anthropic.com"),
+        active_connection_hosts=("claude.ai",),
+    )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:
         return await check_claude(proxy)

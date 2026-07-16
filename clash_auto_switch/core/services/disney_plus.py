@@ -116,6 +116,7 @@ class DisneyPlusChecker(ServiceChecker):
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("disneyplus.com", "bamgrid.com"),
         extra_connection_hosts=("disneyplus.com", "bamgrid.com", "disney.api.edge.bamgrid.com"),
+        active_connection_hosts=("dssott.com",),
     )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

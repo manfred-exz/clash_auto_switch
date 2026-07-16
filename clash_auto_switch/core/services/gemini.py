@@ -51,6 +51,7 @@ class GeminiChecker(ServiceChecker):
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("gemini.google.com",),
         extra_connection_hosts=("gemini.google.com", "google.com", "gstatic.com"),
+        active_connection_hosts=("gemini.google.com",),
     )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

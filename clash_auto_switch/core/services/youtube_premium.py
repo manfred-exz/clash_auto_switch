@@ -77,6 +77,7 @@ class YouTubePremiumChecker(ServiceChecker):
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("youtube.com", "googlevideo.com", "ytimg.com"),
         extra_connection_hosts=("youtube.com", "googlevideo.com", "ytimg.com"),
+        active_connection_hosts=("googlevideo.com",),
     )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:

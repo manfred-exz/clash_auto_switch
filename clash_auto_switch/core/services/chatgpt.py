@@ -46,6 +46,7 @@ class ChatGPTChecker(ServiceChecker):
     host_patterns = ServiceHostPatterns(
         trigger_hosts=("chat.openai.com", "chatgpt.com", "api.openai.com"),
         extra_connection_hosts=("openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"),
+        active_connection_hosts=("chat.openai.com", "chatgpt.com", "api.openai.com"),
     )
 
     async def check(self, proxy: Optional[str] = None) -> ServiceCheckResult:
